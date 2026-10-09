@@ -304,9 +304,9 @@ pre code { background: none; border: 0; padding: 0; word-break: normal; }
   <h1>Aegisub 审校版开发手册</h1>
   <p class="lede">面向中文字幕组工作流的 Aegisub 深度定制。本手册完整记录全部改动、动机与机制，供后续协作者接手继续开发。</p>
   <ul class="chips">
-    <li>基线 <b>ce97a367c</b>（master）</li>
-    <li>状态 <b>全部未提交</b></li>
-    <li>已跟踪文件 <b>52 个 +1954 / −79</b></li>
+    <li>基线 <b>Aegisub 3.5.0</b>（4e440a614）</li>
+    <li>状态 <b>已合并 3.5 并入库</b></li>
+    <li>备份分支 <b>backup-review-edition-pre-3.5</b></li>
     <li>新增 C++ 模块 <b>5 对 .h/.cpp</b></li>
     <li>Automation 脚本 <b>6 个</b></li>
     <li>文档日期 <b>2026-10-09</b></li>
@@ -723,7 +723,7 @@ cmd /c 'build-local\rebuild.cmd &gt; build-local\my_build.log 2&gt;&amp;1'</code
   <div class="blk todo">
     <span class="tag">TODO · 按优先级</span>
     <ol>
-      <li><strong>提交拆分：</strong>约 2000 行改动仍全部未提交。建议按本文 F01–F10 + Lua + 构建链分组提交（每组可独立回滚），提交前逐组跑全量构建。</li>
+      <li><strong>代码入库与 3.5 合并（已完成）：</strong>原未提交修改已完整入库并建立 <code>backup-review-edition-pre-3.5</code> 归档分支；成功合入上游 Aegisub 3.5.0（4e440a614），本地 <code>aegisub.exe</code> 与 <code>aegisub-ready.exe</code> 均已编译验证通过。</li>
       <li><strong>百炼音频模型开通：</strong>账号侧在控制台"模型广场"开通 <code>qwen3.8-omni-flash</code>（或 livetranslate），功能 2 才能实测。代码侧 403 已给开通指引。</li>
       <li><strong>API 密钥轮换：</strong>曾在聊天中暴露，先在百炼控制台换新密钥，再更新 <code>Tool/AI/API Key</code>。仓库与文档永不含密钥。</li>
       <li><strong>内嵌版实测后删除 Lua 版：</strong>维护者确认 F08 稳定后删 <code>AI辅助翻译.lua</code>。</li>
