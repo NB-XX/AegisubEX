@@ -178,6 +178,13 @@ public:
 	/// @param volume The new amplification factor for the audio
 	void SetVolume(double volume);
 
+	/// @brief Change the playback rate so the audio follows sped-up video
+	/// @param speed Multiplier, 1.0 is normal; stretch-capable players keep
+	/// the original pitch at other speeds
+	/// @return The multiplier actually achieved, or 0 when the player cannot
+	/// follow the rate at all
+	double SetSpeed(double speed);
+
 	/// @brief Return the current timing controller
 	/// @return The current timing controller or 0
 	AudioTimingController *GetTimingController() const { return timing_controller.get(); }

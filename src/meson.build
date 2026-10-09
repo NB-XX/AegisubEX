@@ -3,6 +3,7 @@ subdir('libresrc')
 aegisub_src = files(
     'MatroskaParser.c',
     'aegisublocale.cpp',
+    'ai_assistant.cpp',
     'ass_attachment.cpp',
     'ass_dialogue.cpp',
     'ass_entry.cpp',
@@ -13,6 +14,7 @@ aegisub_src = files(
     'ass_override.cpp',
     'ass_parser.cpp',
     'ass_style.cpp',
+	'ass_style_fx.cpp',
     'ass_style_storage.cpp',
     'async_video_provider.cpp',
     'audio_box.cpp',
@@ -37,6 +39,7 @@ aegisub_src = files(
     'charset_detect.cpp',
     'colorspace.cpp',
     'colour_button.cpp',
+    'command/ai.cpp',
     'command/app.cpp',
     'command/audio.cpp',
     'command/automation.cpp',
@@ -116,6 +119,7 @@ aegisub_src = files(
     'subs_edit_ctrl.cpp',
     'subs_preview.cpp',
     'subtitle_format.cpp',
+	'subtitle_format_audit.cpp',
     'subtitle_format_ass.cpp',
     'subtitle_format_ebu3264.cpp',
     'subtitle_format_encore.cpp',
@@ -157,6 +161,7 @@ aegisub_src = files(
     'visual_tool_rotatexy.cpp',
     'visual_tool_rotatez.cpp',
     'visual_tool_scale.cpp',
+    'visual_tool_timing_region.cpp',
     'visual_tool_vector_clip.cpp',
 )
 

@@ -81,6 +81,7 @@ class SubsEditBox final : public wxPanel {
 	bool button_bar_split = true;
 	/// Are the controls currently enabled?
 	bool controls_enabled = true;
+	bool review_mode = false;
 
 	agi::Context *c;
 
@@ -128,6 +129,10 @@ class SubsEditBox final : public wxPanel {
 	/// Timer to stop coalescing changes after a break with no edits
 	wxTimer undo_timer;
 
+	/// Review-mode timer polling which window currently holds the keyboard
+	/// focus, so the video can auto-pause while editing and resume on leaving
+	wxTimer focus_timer;
+
 	/// The start and end times of the selected lines without changes made to
 	/// avoid negative durations, so that they can be restored if future changes
 	/// eliminate the negative durations
@@ -145,6 +150,9 @@ class SubsEditBox final : public wxPanel {
 	void OnKeyDown(wxKeyEvent &event);
 
 	void OnActiveLineChanged(AssDialogue *new_line);
+	void OnReviewModeChanged(bool active);
+	void OnFocusPoll(wxTimerEvent &event);
+	bool IsFocusInEditArea() const;
 	void OnSelectedSetChanged();
 	void OnLineInitialTextChanged(std::string const& new_text);
 

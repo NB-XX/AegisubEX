@@ -37,6 +37,7 @@
 #include <wx/timer.h>
 
 class AssDialogue;
+class AssFile;
 class AsyncVideoProvider;
 struct SubtitlesProviderErrorEvent;
 struct VideoProviderErrorEvent;
@@ -60,6 +61,8 @@ class VideoController final : public wxEvtHandler {
 	agi::signal::Signal<int> Seek;
 	/// Aspect ratio was changed (type, value)
 	agi::signal::Signal<AspectRatio, double> ARChange;
+	agi::signal::Signal<bool> ReviewModeChange;
+	agi::signal::Signal<bool> PlaybackChange;
 
 	agi::Context *context;
 
@@ -83,10 +86,29 @@ class VideoController final : public wxEvtHandler {
 
 	/// The last frame to play if video is currently playing
 	int end_frame = 0;
+	bool review_mode = false;
+	bool review_preview = false;
+	bool review_was_playing = false;
+	int review_saved_frame = 0;
+	/// Playback was auto-paused because the focus moved into the editing
+	/// areas (subtitle edit box or audio box) while in review mode; moving
+	/// focus back out resumes playback from the pause position, or from the
+	/// active line's start when the "replay after edit" option is on and the
+	/// line was actually modified during the pause.
+	bool focus_paused = false;
+	/// Start time (ms) of the line modified during the current focus pause,
+	/// or -1 when nothing was committed. Recorded on commit because clicking
+	/// another grid row already moves the selection before playback resumes.
+	int review_edit_time = -1;
 
 	/// The frame number which was last requested from the video provider,
 	/// which may not be the same thing as the currently displayed frame
 	int frame_n = 0;
+
+	/// Video playback rate multiplier; 1.0 is real time. Rate-capable audio
+	/// players (DirectSound) follow it, time-stretching the sound so the
+	/// pitch stays normal; players that can do neither leave audio muted.
+	double play_speed = 1.0;
 
 	/// The picture aspect ratio of the video if the aspect ratio has been
 	/// overridden by the user
@@ -110,12 +132,22 @@ class VideoController final : public wxEvtHandler {
 	void OnActiveLineChanged(AssDialogue *line);
 
 	void RequestFrame();
+	void FinishReviewPreview(bool resume_playback);
 
 public:
 	VideoController(agi::Context *context);
 
 	/// Is the video currently playing?
 	bool IsPlaying() const { return playback.IsRunning(); }
+	bool IsReviewMode() const { return review_mode; }
+	void SetReviewMode(bool active);
+	void PlayReviewPreview(int start_ms, int end_ms, AssFile const *subtitles);
+	/// @brief Report whether the keyboard focus is inside the editing areas
+	/// (subtitle edit box or audio display). In review mode, moving focus in
+	/// pauses any running playback and moving it out resumes from the frame
+	/// the pause left off at, so the reviewer can edit and listen without
+	/// manually stopping and restarting the video.
+	void OnEditAreaFocus(bool in);
 
 	/// Get the current frame number
 	int GetFrameN() const { return frame_n; }
@@ -157,8 +189,18 @@ public:
 	/// Stop playing
 	void Stop();
 
+	/// @brief Set the video playback rate multiplier
+	/// Persists to config; rebases the clock and audio when called while
+	/// playing. Audio follows the rate when the player supports it, otherwise
+	/// it is muted for the duration.
+	void SetSpeed(double speed);
+	/// Current playback rate multiplier (1.0 = real time)
+	double GetSpeed() const { return play_speed; }
+
 	DEFINE_SIGNAL_ADDERS(Seek, AddSeekListener)
 	DEFINE_SIGNAL_ADDERS(ARChange, AddARChangeListener)
+	DEFINE_SIGNAL_ADDERS(ReviewModeChange, AddReviewModeListener)
+	DEFINE_SIGNAL_ADDERS(PlaybackChange, AddPlaybackListener)
 
 	int TimeAtFrame(int frame, agi::vfr::Time type = agi::vfr::EXACT) const;
 	int FrameAtTime(int time, agi::vfr::Time type = agi::vfr::EXACT) const;

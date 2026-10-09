@@ -56,6 +56,24 @@ When compiling on Apple Silicon, replace `/usr/local` with `/opt/homebrew`.
 
 Once the dependencies are installed, build Aegisub with `meson build && meson compile -C build`.
 
+#### Build with current FFmpeg codecs (including AV1 and VP9)
+
+The system `ffms2` package may link to an older FFmpeg build. To use the
+FFmpeg and dav1d subprojects pinned by this checkout instead, configure a
+separate build directory and force those dependencies to use their source
+fallbacks:
+
+```bash
+meson setup build_ffmpeg \
+  --force-fallback-for=ffms2,libavformat,libavcodec,libswscale,libavutil,libswresample,dav1d
+meson compile -C build_ffmpeg
+```
+
+FFmpeg provides the VP9 decoder, and the bundled FFmpeg build enables dav1d
+for AV1. This controls the decoder libraries used by Aegisub; it does not
+download or convert YouTube videos. Codec support in an already-installed
+binary depends on the FFmpeg libraries that binary was packaged with.
+
 #### Build a local DMG
 
 Homebrew bottles target the macOS release they were built for, which may be

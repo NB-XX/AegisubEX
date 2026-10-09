@@ -42,6 +42,8 @@
 
 #include <libaegisub/fs.h>
 
+#include <cmath>
+#include <limits>
 #include <string_view>
 
 using agi::ycbcr_matrix;
@@ -270,8 +272,13 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, ycbcr::
 		if (CurFrameData->KeyFrame)
 			KeyFramesList.push_back(CurFrameNum);
 
-		// calculate timestamp and add to timecodes vector
-		int Timestamp = (int)((CurFrameData->PTS * TimeBase->Num) / TimeBase->Den);
+		// FFMS2 timestamps are rational wall-clock milliseconds. Round to the
+		// nearest millisecond instead of truncating: at 60 fps this avoids
+		// biasing every frame boundary early by up to 1 ms.
+		const long double timestamp = static_cast<long double>(CurFrameData->PTS) * TimeBase->Num / TimeBase->Den;
+		if (timestamp < std::numeric_limits<int>::min() || timestamp > std::numeric_limits<int>::max())
+			throw VideoOpenError("Video timestamp is outside the supported range");
+		int Timestamp = static_cast<int>(std::llround(timestamp));
 		TimecodesVector.push_back(Timestamp);
 	}
 	if (TimecodesVector.size() < 2)

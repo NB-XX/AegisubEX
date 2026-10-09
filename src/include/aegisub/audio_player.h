@@ -53,6 +53,13 @@ public:
 
 	virtual void SetVolume(double volume)=0;
 
+	/// @brief Change the playback rate so the sound follows sped-up video
+	/// @param speed Multiplier, 1.0 is normal; stretch-capable players
+	/// time-stretch the audio so the pitch is preserved at other speeds
+	/// @return The multiplier actually achieved, or 0 when this player cannot
+	/// follow the rate at all
+	virtual double SetSpeed(double speed) { return speed == 1.0 ? 1.0 : 0.0; }
+
 	virtual int64_t GetEndPosition()=0;
 	virtual int64_t GetCurrentPosition()=0;
 	virtual void SetEndPosition(int64_t pos)=0;

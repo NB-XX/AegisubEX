@@ -44,6 +44,7 @@
 
 #include <libaegisub/ass/time.h>
 
+#include <algorithm>
 #include <wx/log.h>
 
 VideoController::VideoController(agi::Context *c)
@@ -58,6 +59,7 @@ VideoController::VideoController(agi::Context *c)
 	Bind(EVT_VIDEO_ERROR, &VideoController::OnVideoError, this);
 	Bind(EVT_SUBTITLES_ERROR, &VideoController::OnSubtitlesError, this);
 	playback.Bind(wxEVT_TIMER, &VideoController::OnPlayTimer, this);
+	play_speed = std::clamp<int64_t>(OPT_GET("Tool/Playback/Play Speed")->GetInt(), 25, 400) / 100.0;
 }
 
 void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
@@ -67,6 +69,13 @@ void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 }
 
 void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
+	// Remember when and where a line was modified during a review-mode focus
+	// pause, so the "replay after edit" option can send playback back there.
+	// Only content edits count: text, timing and per-line metadata, not adds,
+	// deletes or file-wide commits.
+	if (review_mode && focus_paused && changed && (type & AssFile::COMMIT_DIAG_FULL))
+		review_edit_time = changed->Start;
+
 	if (!provider) return;
 
 	if ((type & AssFile::COMMIT_SCRIPTINFO) || type == AssFile::COMMIT_NEW) {
@@ -84,7 +93,7 @@ void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
 }
 
 void VideoController::OnActiveLineChanged(AssDialogue *line) {
-	if (line && provider && OPT_GET("Video/Subtitle Sync")->GetBool()) {
+	if (!review_mode && line && provider && OPT_GET("Video/Subtitle Sync")->GetBool()) {
 		Stop();
 		JumpToTime(line->Start);
 	}
@@ -143,10 +152,107 @@ void VideoController::Play() {
 	start_ms = TimeAtFrame(frame_n);
 	end_frame = provider->GetFrameCount() - 1;
 
-	context->audioController->PlayToEnd(start_ms);
+	// Sound follows the video clock: the player time-stretches the audio so
+	// speed changes keep the normal pitch. Players that can offer neither
+	// stretching nor resampling would let audio drift against the sped-up
+	// video, so those go silent instead.
+	if (context->audioController->SetSpeed(play_speed) > 0)
+		context->audioController->PlayToEnd(start_ms);
+	else
+		context->audioController->Stop();
 
 	playback_start_time = std::chrono::steady_clock::now();
 	playback.Start(10);
+	PlaybackChange(true);
+}
+
+void VideoController::SetReviewMode(bool active) {
+	if (review_mode == active) return;
+	review_mode = active;
+	if (!active) {
+		focus_paused = false;
+		review_edit_time = -1;
+		if (review_preview)
+			FinishReviewPreview(false);
+	}
+	ReviewModeChange(active);
+}
+
+void VideoController::OnEditAreaFocus(bool in) {
+	if (!review_mode) {
+		focus_paused = false;
+		review_edit_time = -1;
+		return;
+	}
+	if (in) {
+		// Focus landed in the editing areas (text box, style row, timing
+		// fields or audio display): pause so the reviewer can work, and
+		// remember that this pause was automatic.
+		if (IsPlaying()) {
+			Stop();
+			focus_paused = true;
+			review_edit_time = -1;
+		}
+	}
+	else if (focus_paused) {
+		// Focus left the editing areas (typically back to the subtitle
+		// grid): resume from the frame the automatic pause stopped on, or
+		// — with "replay after edit" on and the line actually modified
+		// during the pause — restart from the edited line's own start so
+		// the reviewer immediately re-watches the change.
+		int replay_time = review_edit_time;
+		focus_paused = false;
+		review_edit_time = -1;
+		if (!IsPlaying()) {
+			if (replay_time >= 0 && OPT_GET("Tool/Playback/Review Replay After Edit")->GetBool())
+				JumpToTime(replay_time);
+			Play();
+		}
+	}
+}
+
+void VideoController::PlayReviewPreview(int start, int end, AssFile const *subtitles) {
+	if (!provider || !subtitles || end <= start) return;
+	bool resume_after_preview = review_preview ? review_was_playing : IsPlaying();
+	int saved_frame = review_preview ? review_saved_frame : frame_n;
+	if (review_preview) FinishReviewPreview(false);
+	review_was_playing = resume_after_preview;
+	review_saved_frame = saved_frame;
+	if (IsPlaying()) {
+		playback.Stop();
+		context->audioController->Stop();
+		PlaybackChange(false);
+	}
+	review_preview = true;
+	provider->LoadSubtitles(subtitles);
+	int first = mid(0, FrameAtTime(std::max(0, start - 1000), agi::vfr::START), provider->GetFrameCount() - 1);
+	int last_exclusive = mid(first + 1, FrameAtTime(end + 1000, agi::vfr::END) + 1, provider->GetFrameCount());
+	frame_n = first;
+	RequestFrame();
+	Seek(frame_n);
+	start_ms = TimeAtFrame(frame_n);
+	end_frame = last_exclusive;
+	if (context->audioController->SetSpeed(play_speed) > 0)
+		context->audioController->PlayRange(TimeRange(start_ms, TimeAtFrame(std::max(first, last_exclusive - 1), agi::vfr::END)));
+	else
+		context->audioController->Stop();
+	playback_start_time = std::chrono::steady_clock::now();
+	playback.Start(10);
+	PlaybackChange(true);
+}
+
+void VideoController::FinishReviewPreview(bool resume_playback) {
+	if (!review_preview) return;
+	playback.Stop();
+	context->audioController->Stop();
+	review_preview = false;
+	provider->LoadSubtitles(context->ass.get());
+	frame_n = mid(0, review_saved_frame, provider->GetFrameCount() - 1);
+	RequestFrame();
+	Seek(frame_n);
+	PlaybackChange(false);
+	if (resume_playback && review_was_playing)
+		Play();
 }
 
 void VideoController::PlayLine() {
@@ -155,7 +261,8 @@ void VideoController::PlayLine() {
 	AssDialogue *curline = context->selectionController->GetActiveLine();
 	if (!curline) return;
 
-	context->audioController->PlayRange(TimeRange(curline->Start, curline->End));
+	if (context->audioController->SetSpeed(play_speed) > 0)
+		context->audioController->PlayRange(TimeRange(curline->Start, curline->End));
 
 	// Round-trip conversion to convert start to exact
 	int startFrame = FrameAtTime(context->selectionController->GetActiveLine()->Start, agi::vfr::START);
@@ -166,27 +273,65 @@ void VideoController::PlayLine() {
 
 	playback_start_time = std::chrono::steady_clock::now();
 	playback.Start(10);
+	PlaybackChange(true);
 }
 
 void VideoController::Stop() {
+	if (review_preview) {
+		FinishReviewPreview(false);
+		return;
+	}
 	if (IsPlaying()) {
 		playback.Stop();
 		context->audioController->Stop();
+		PlaybackChange(false);
 	}
 }
 
 void VideoController::OnPlayTimer(wxTimerEvent &) {
 	using namespace std::chrono;
-	int next_frame = FrameAtTime(start_ms + duration_cast<milliseconds>(steady_clock::now() - playback_start_time).count());
+	// Virtual timeline: wall-clock elapsed scaled by the playback speed, so a
+	// 10 ms timer tick advances 10/20/40 ms of video on 1/2/4x etc.
+	int64_t elapsed = duration_cast<milliseconds>(steady_clock::now() - playback_start_time).count();
+	int64_t virtual_ms = start_ms + static_cast<int64_t>(elapsed * play_speed);
+	int next_frame = FrameAtTime(static_cast<int>(std::min<int64_t>(virtual_ms, 2000000000LL)));
 	if (next_frame == frame_n) return;
 
-	if (next_frame >= end_frame)
-		Stop();
+	if (next_frame >= end_frame) {
+		if (review_preview)
+			FinishReviewPreview(true);
+		else
+			Stop();
+	}
 	else {
 		frame_n = next_frame;
 		RequestFrame();
 		Seek(frame_n);
 	}
+}
+
+void VideoController::SetSpeed(double speed) {
+	if (play_speed == speed) return;
+	bool was_playing = IsPlaying();
+	play_speed = speed;
+	OPT_SET("Tool/Playback/Play Speed")->SetInt(static_cast<int>(speed * 100));
+
+	// Sync the audio player's rate right away, even while stopped: previews
+	// started from the audio box follow the player's own speed, and should
+	// use the newly picked rate instead of the one left over from the last
+	// video playback.
+	bool audio_follows = context->audioController->SetSpeed(play_speed) > 0;
+	if (!was_playing || !provider) return;
+
+	// Re-anchor the clock at the currently displayed frame so the new speed
+	// takes effect without a jump, then keep audio in step: it follows the
+	// rate when the player can deliver it, and stays silent when it cannot.
+	start_ms = TimeAtFrame(frame_n);
+	playback_start_time = std::chrono::steady_clock::now();
+	if (audio_follows)
+		context->audioController->PlayToEnd(start_ms);
+	else
+		context->audioController->Stop();
 }
 
 double VideoController::GetARFromType(AspectRatio type) const {

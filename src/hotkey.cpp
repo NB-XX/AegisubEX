@@ -23,6 +23,9 @@
 
 #include <libaegisub/path.h>
 
+#include <algorithm>
+#include <string_view>
+
 #include <boost/range/algorithm/find.hpp>
 #include <boost/range/iterator_range.hpp>
 #include <wx/intl.h>
@@ -114,6 +117,28 @@ void init() {
 
 		hotkey::inst->SetHotkeyMap(std::move(hk_map));
 		migrations.emplace_back("duplicate -> split");
+	}
+
+	if (boost::find(migrations, "review playback controls") == end(migrations)) {
+		auto hk_map = hotkey::inst->GetHotkeyMap();
+		auto [it, it_end] = hk_map.equal_range("video/play");
+		for (; it != it_end; ) {
+			if (it->second.Context() == "Default" && it->second.Str() == "Ctrl-P")
+				it = hk_map.erase(it);
+			else
+				++it;
+		}
+		auto has_combo = [&hk_map](std::string_view key) {
+			return std::any_of(hk_map.begin(), hk_map.end(), [key](auto const& item) {
+				return item.second.Context() == "Default" && item.second.Str() == key;
+			});
+		};
+		if (!has_combo("Ctrl-P"))
+			hk_map.emplace("review/play_pause", agi::hotkey::Combo("Default", "review/play_pause", "Ctrl-P"));
+		if (!has_combo("Ctrl-Shift-P"))
+			hk_map.emplace("review/preview", agi::hotkey::Combo("Default", "review/preview", "Ctrl-Shift-P"));
+		hotkey::inst->SetHotkeyMap(std::move(hk_map));
+		migrations.emplace_back("review playback controls");
 	}
 
 #ifdef __WXMAC__

@@ -218,9 +218,11 @@ void VideoDisplay::Render() try {
 	wxSize client_size = GetClientSize();
 	client_size = wxSize(std::max(1, client_size.GetWidth()), std::max(1, client_size.GetHeight()));
 
+	// Set the viewport before drawing the decoded frame. Setting it after the
+	// renderer runs leaves the video using the previous (often 1x1) GL viewport.
+	E(glViewport(0, 0, client_size.GetWidth() * scale_factor, client_size.GetHeight() * scale_factor));
 	videoOut->Render(client_size.GetWidth() * scale_factor, client_size.GetHeight() * scale_factor,
 		content_left, content_bottom, content_width, content_height);
-	E(glViewport(0, 0, client_size.GetWidth() * scale_factor, client_size.GetHeight() * scale_factor));
 
 	E(glMatrixMode(GL_PROJECTION));
 	E(glLoadIdentity());
@@ -523,6 +525,7 @@ void VideoDisplay::OnContextMenu(wxContextMenuEvent&) {
 }
 
 void VideoDisplay::OnKeyDown(wxKeyEvent &event) {
+	if (tool && tool->OnKeyDown(event)) return;
 	hotkey::check("Video", con, event);
 }
 

@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Aegisub 审校版开发手册</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* 版式计划：面向协作开发的交接手册。冷墨蓝纸面 + 声波青主色（取 Aegisub 音频波形意象），
+     标题用衬线（Noto Serif SC）正文无衬线（Noto Sans SC），数据一律等宽（JetBrains Mono）。 */
+  --paper: #EDF1F5;
+  --surface: #FFFFFF;
+  --ink: #17212B;
+  --ink-soft: #51606F;
+  --line: #D2DBE4;
+  --line-soft: #E4EAF1;
+  --accent: #0B6E7F;
+  --accent-deep: #085564;
+  --accent-bg: #E1EEF1;
+  --caution: #9A5B00;
+  --caution-bg: #F5EADA;
+  --good: #2E6B4F;
+  --good-bg: #E2EFE7;
+  --code-bg: #F2F5F8;
+  --shadow: 0 1px 3px rgba(23,33,43,.08), 0 6px 20px rgba(23,33,43,.06);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0F161E;
+    --surface: #161F2A;
+    --ink: #DDE7F0;
+    --ink-soft: #94A5B5;
+    --line: #2A3948;
+    --line-soft: #1F2C3A;
+    --accent: #56B9CB;
+    --accent-deep: #8ED4E0;
+    --accent-bg: #14282F;
+    --caution: #DDA661;
+    --caution-bg: #2C2317;
+    --good: #7FC4A0;
+    --good-bg: #16271E;
+    --code-bg: #1A2531;
+    --shadow: 0 1px 3px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.3);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0F161E;
+  --surface: #161F2A;
+  --ink: #DDE7F0;
+  --ink-soft: #94A5B5;
+  --line: #2A3948;
+  --line-soft: #1F2C3A;
+  --accent: #56B9CB;
+  --accent-deep: #8ED4E0;
+  --accent-bg: #14282F;
+  --caution: #DDA661;
+  --caution-bg: #2C2317;
+  --good: #7FC4A0;
+  --good-bg: #16271E;
+  --code-bg: #1A2531;
+  --shadow: 0 1px 3px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.3);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0;
+  padding-inline: max(16px, calc((100vw - 1240px) / 2));
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 16px/1.75 "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+code, .mono { font-family: "JetBrains Mono", Consolas, "Courier New", monospace; }
+code {
+  background: var(--code-bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: .86em;
+  word-break: break-all;
+}
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ===== 页头 ===== */
+header.masthead {
+  padding-block: 44px 20px;
+}
+.masthead .kicker {
+  font: 600 12px/1 "JetBrains Mono", monospace;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 14px;
+}
+.masthead h1 {
+  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-weight: 700;
+  font-size: clamp(1.7rem, 4.5vw, 2.6rem);
+  line-height: 1.25;
+  margin: 0 0 10px;
+  text-wrap: balance;
+}
+.masthead .lede { color: var(--ink-soft); max-width: 62ch; margin: 0 0 18px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.chips li {
+  font: 600 12.5px/1 "JetBrains Mono", monospace;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-soft);
+}
+.chips li b { color: var(--ink); font-weight: 600; }
+.ruler { display: block; max-width: 100%; margin-top: 22px; color: var(--line); }
+.ruler .tick-major { stroke: var(--ink-soft); }
+.ruler .tick-minor { stroke: var(--line); }
+.ruler .region { fill: var(--accent-bg); stroke: var(--accent); }
+.ruler text { fill: var(--ink-soft); font: 11px "JetBrains Mono", monospace; }
+
+/* ===== 布局 ===== */
+.layout {
+  display: grid;
+  grid-template-columns: 258px minmax(0, 1fr);
+  gap: clamp(24px, 4vw, 56px);
+  padding-block: 8px 120px;
+  align-items: start;
+}
+nav.toc {
+  position: sticky;
+  top: 24px;
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+  font-size: 13.5px;
+}
+nav.toc .toc-title {
+  font: 600 11px/1 "JetBrains Mono", monospace;
+  letter-spacing: .16em;
+  color: var(--ink-soft);
+  margin: 0 0 10px;
+}
+nav.toc ol { list-style: none; margin: 0; padding: 0; }
+nav.toc li a {
+  display: block;
+  padding: 5px 10px 5px 12px;
+  border-left: 2px solid var(--line);
+  color: var(--ink-soft);
+  text-decoration: none;
+}
+nav.toc li.sub a { padding-left: 30px; font-size: 12.5px; }
+nav.toc li a:hover { color: var(--ink); }
+nav.toc li a.active { border-left-color: var(--accent); color: var(--accent-deep); font-weight: 500; }
+
+main { min-width: 0; }
+section.chapter {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: clamp(20px, 3.2vw, 36px);
+  margin: 0 0 26px;
+}
+.eyebrow {
+  font: 600 12px/1 "JetBrains Mono", monospace;
+  letter-spacing: .14em;
+  color: var(--accent);
+  margin: 0 0 8px;
+}
+section.chapter > h2 {
+  font-family: "Noto Serif SC", serif;
+  font-weight: 700;
+  font-size: clamp(1.35rem, 3vw, 1.75rem);
+  line-height: 1.3;
+  margin: 0 0 14px;
+  text-wrap: balance;
+}
+section.chapter h3 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 28px 0 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+  text-wrap: balance;
+}
+section.chapter h3:first-of-type { border-top: 0; padding-top: 0; }
+p { max-width: 70ch; }
+ul, ol { max-width: 70ch; padding-inline-start: 1.4em; }
+li { margin: 4px 0; }
+
+/* 功能卡片内的小块 */
+.blk {
+  margin: 14px 0;
+  padding: 14px 18px;
+  border-radius: 10px;
+  background: var(--code-bg);
+  border: 1px solid var(--line-soft);
+}
+.blk > .tag {
+  display: inline-block;
+  font: 600 11px/1 "JetBrains Mono", monospace;
+  letter-spacing: .12em;
+  color: var(--accent-deep);
+  background: var(--accent-bg);
+  padding: 4px 8px;
+  border-radius: 5px;
+  margin-bottom: 8px;
+}
+.blk.note { border-left: 3px solid var(--accent); }
+.blk.warn { border-left: 3px solid var(--caution); background: var(--caution-bg); }
+.blk.warn > .tag { color: var(--caution); background: color-mix(in srgb, var(--caution-bg) 60%, var(--surface)); }
+.blk.todo { border-left: 3px solid var(--good); }
+.blk p:last-child, .blk ul:last-child { margin-bottom: 0; }
+
+/* 表格 */
+.tblwrap { overflow-x: auto; margin: 14px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th {
+  text-align: left;
+  font: 600 11.5px/1 "JetBrains Mono", monospace;
+  letter-spacing: .08em;
+  color: var(--ink-soft);
+  border-bottom: 2px solid var(--line);
+  padding: 8px 12px 8px 0;
+  white-space: nowrap;
+}
+td { border-bottom: 1px solid var(--line-soft); padding: 9px 12px 9px 0; vertical-align: top; }
+td:first-child { white-space: normal; }
+tr:last-child td { border-bottom: 0; }
+td .pill {
+  display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px;
+  background: var(--accent-bg); color: var(--accent-deep); font-weight: 500;
+}
+td .pill.c { background: var(--caution-bg); color: var(--caution); }
+td .pill.g { background: var(--good-bg); color: var(--good); }
+
+/* 代码块 */
+pre {
+  overflow-x: auto;
+  background: var(--code-bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  padding: 14px 16px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+pre code { background: none; border: 0; padding: 0; word-break: normal; }
+
+/* 特性小节头部 */
+.feat-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin: 34px 0 6px; }
+.feat-head:first-child { margin-top: 10px; }
+.feat-head .fid {
+  font: 600 13px/1 "JetBrains Mono", monospace;
+  color: var(--accent-deep);
+  background: var(--accent-bg);
+  padding: 6px 10px;
+  border-radius: 7px;
+}
+.feat-head h4 {
+  font-family: "Noto Serif SC", serif;
+  font-size: 1.18rem;
+  font-weight: 700;
+  margin: 0;
+  text-wrap: balance;
+}
+.feat { max-width: 76ch; }
+.feat > h3 { border-top: 0; padding-top: 0; margin-top: 0; }
+
+/* 移动端：目录变为横向滚动条 */
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  nav.toc {
+    position: static; max-height: none; overflow: visible;
+    border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+    padding: 12px 14px;
+  }
+  nav.toc ol { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; }
+  nav.toc li a {
+    border-left: 0; border: 1px solid var(--line-soft); border-radius: 999px;
+    padding: 5px 12px; white-space: nowrap; font-size: 13px;
+  }
+  nav.toc li.sub { display: none; }
+  nav.toc li a.active { border-color: var(--accent); }
+}
+.footer-note {
+  color: var(--ink-soft);
+  font-size: 13px;
+  text-align: left;
+  padding: 0 6px 40px;
+  max-width: 70ch;
+}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <p class="kicker">AEGISUB FORK · HANDOFF</p>
+  <h1>Aegisub 审校版开发手册</h1>
+  <p class="lede">面向中文字幕组工作流的 Aegisub 深度定制。本手册完整记录全部改动、动机与机制，供后续协作者接手继续开发。</p>
+  <ul class="chips">
+    <li>基线 <b>ce97a367c</b>（master）</li>
+    <li>状态 <b>全部未提交</b></li>
+    <li>已跟踪文件 <b>52 个 +1954 / −79</b></li>
+    <li>新增 C++ 模块 <b>5 对 .h/.cpp</b></li>
+    <li>Automation 脚本 <b>6 个</b></li>
+    <li>文档日期 <b>2026-10-09</b></li>
+  </ul>
+  <svg class="ruler" viewBox="0 0 760 56" role="img" aria-label="时间码标尺装饰图">
+    <line x1="0" y1="46" x2="760" y2="46" class="tick-minor" stroke-width="1"/>
+    <g id="ruler-ticks"></g>
+    <rect class="region" x="330" y="14" width="180" height="26" stroke-width="1.5" rx="2"/>
+    <text x="336" y="10">{\an7} 帧匹配区域 · ±10 s 搜索窗</text>
+  </svg>
+</header>
+
+<div class="layout">
+
+<nav class="toc" id="toc">
+  <p class="toc-title">目录</p>
+  <ol>
+    <li><a href="#overview">项目概况</a></li>
+    <li><a href="#build">构建与运行</a></li>
+    <li><a href="#conventions">开发规范与约定</a></li>
+    <li><a href="#features">功能改动详解</a>
+      <ol>
+        <li class="sub"><a href="#f01">F01 倍速播放</a></li>
+        <li class="sub"><a href="#f02">F02 字幕审校模式</a></li>
+        <li class="sub"><a href="#f03">F03 自动对帧</a></li>
+        <li class="sub"><a href="#f04">F04 样式特效</a></li>
+        <li class="sub"><a href="#f05">F05 删除未使用样式</a></li>
+        <li class="sub"><a href="#f06">F06 批量预设标签</a></li>
+        <li class="sub"><a href="#f07">F07 CPS / 字数排序</a></li>
+        <li class="sub"><a href="#f08">F08 AI 内嵌翻译</a></li>
+        <li class="sub"><a href="#f09">F09 字幕格式审查</a></li>
+        <li class="sub"><a href="#f10">F10 修复清单</a></li>
+      </ol>
+    </li>
+    <li><a href="#lua">Lua 自动化脚本</a></li>
+    <li><a href="#options">配置键参考</a></li>
+    <li><a href="#commands">命令 / 菜单 / 工具栏 / 快捷键</a></li>
+    <li><a href="#files">新增文件索引</a></li>
+    <li><a href="#todo">已知问题与待办</a></li>
+    <li><a href="#tour">新协作者验收路线</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<!-- ============ 概况 ============ -->
+<section class="chapter" id="overview">
+  <p class="eyebrow">00 · OVERVIEW</p>
+  <h2>项目概况</h2>
+  <p>维护者是一位中文字幕组审校编辑，<strong>不直接编写 C++</strong>：功能以中文工作流需求描述提出，由 AI 辅助编码完成后在实际审校流程中验收。接手协作时请把这一点作为默认工作模式——需求侧关心的是"我在校对时怎样少按几次键"，实现侧的取舍在本文档各功能的"坑"小节里都有记录。</p>
+  <p>全部定制集中在 <code>master</code> 分支工作区，基线提交 <code>ce97a367c</code>（"Cross-build Intel macOS jobs on Apple Silicon (#705)"）。改动分三类：</p>
+  <ul>
+    <li><strong>对上游文件的修改</strong>（52 个）：以 <code>src/</code> 下的播放、视频、网格、对话框为主，附 <code>libaegisub/windows/path_win.cpp</code> 一个关键 bug 修复。</li>
+    <li><strong>新增 C++ 模块</strong>：样式特效 <code>ass_style_fx</code>、自动对帧工具 <code>visual_tool_timing_region</code>、字幕格式审查 <code>subtitle_format_audit</code>、AI 内嵌翻译 <code>ai_assistant</code> + <code>command/ai.cpp</code>。</li>
+    <li><strong>周边文件</strong>：6 个 Automation Lua 脚本、PO 编译工具 <code>tools/compile_po.py</code>、构建辅助脚本（<code>build-local/</code>，不入库）、启动命令 <code>打开本地新版Aegisub.cmd</code>。</li>
+  </ul>
+  <p>验证以 Windows x64 本地构建为准：产出 <code>build-local\aegisub.exe</code>，再由 <code>link-ready.cmd</code> 链接成日常使用的 <code>aegisub-ready.exe</code>。macOS 路径未做针对性改动（除 <code>aegisublocale.cpp</code> 保持原逻辑）。</p>
+  <div class="blk warn">
+    <span class="tag">安全红线</span>
+    <p>阿里云百炼 API 密钥<strong>永远不写入仓库</strong>：运行时保存在用户 <code>%APPDATA%</code> 的 Aegisub 设置（<code>Tool/AI/API Key</code>），首次运行从旧 Lua 版配置 <code>%APPDATA%\ai_translate.conf</code> 自动继承。曾有密钥在聊天中暴露，<strong>必须先在百炼控制台轮换</strong>。文档、提交信息、日志里都不允许出现密钥本体。</p>
+  </div>
+</section>
+
+<!-- ============ 构建 ============ -->
+<section class="chapter" id="build">
+  <p class="eyebrow">01 · BUILD</p>
+  <h2>构建与运行（Windows）</h2>
+
+  <h3>工具链与环境</h3>
+  <ul>
+    <li>Visual Studio 2022 <strong>Build Tools</strong>（MSVC，x64），路径以 <code>VsDevCmd.bat</code> 为准。</li>
+    <li>Python + meson + ninja（构建调用一律走 <code>python -m ninja</code>，不依赖全局 ninja）。</li>
+    <li>Git for Windows：LuaJIT 子项目 configure 需要 <code>sed</code>。PowerShell 里调脚本时必须先补 PATH：</li>
+  </ul>
+  <pre><code>$env:PATH = 'C:\Program Files\Git\usr\bin;' + $env:PATH
+cmd /c 'build-local\rebuild.cmd &gt; build-local\my_build.log 2&gt;&amp;1'</code></pre>
+  <p>子项目（wxWidgets 3.2.12、FFmpeg、dav1d、curl、boost 1.83、hunspell 等）全部走 meson subproject fallback，已在 <code>build-local</code> 内配置完毕，日常增量构建不需要重新 setup。</p>
+
+  <h3>两个脚本的分工</h3>
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>脚本</th><th>内容</th><th>产物</th></tr></thead>
+    <tbody>
+      <tr><td><code>build-local\rebuild.cmd</code></td><td>VsDevCmd → <code>python -m ninja aegisub.exe</code></td><td><code>build-local\aegisub.exe</code>（完整重链接产物）</td></tr>
+      <tr><td><code>build-local\link-ready.cmd</code></td><td>VsDevCmd → <code>link @aegisub-ready.exe.rsp</code></td><td><code>build-local\aegisub-ready.exe</code>（日常使用的 "ready" 版）</td></tr>
+      <tr><td><code>打开本地新版Aegisub.cmd</code>（仓库根）</td><td>启动 <code>%~dp0build-local\aegisub-ready.exe</code>，缺失时提示路径并暂停</td><td>—（纯 ASCII 内容 + 中文文件名由桌面快捷方式调用，避开编码问题）</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>aegisub-ready.exe.rsp：手工维护的链接清单</h3>
+  <p>这是本项目最容易踩的坑。<code>aegisub-ready.exe</code> 不走 ninja 链接，而是拿 <code>aegisub.exe.p/</code> 目录下已编译好的 <code>.obj</code> 手工链接。清单是仓库外文件（<code>build-local</code> 被 <code>.gitignore</code> 的 <code>build*/</code> 规则忽略）。</p>
+  <ul>
+    <li>obj 命名规则：<code>aegisub.exe.p/src_&lt;路径，/→_&gt;.cpp.obj</code>，如 <code>src_command_ai.cpp.obj</code>、<code>src_ai_assistant.cpp.obj</code>。</li>
+    <li><strong>新增/删除源文件时</strong>，必须同步增删 rsp 里对应 obj 行（按字母序插到正确位置），否则 ready 版会缺符号（LNK2019）或多出陈旧 obj。</li>
+    <li>只改已有文件内容时不需要动 rsp，重链即可。</li>
+  </ul>
+
+  <h3>构建纪律（血泪经验，务必遵守）</h3>
+  <div class="blk warn">
+    <span class="tag">RULE</span>
+    <ul>
+      <li><strong>改动任何头文件后一律全量构建</strong>（跑完整 ninja，不挑目标文件增量编译），避免不同 TU 之间的 ODR 不一致造成"编译能过、运行崩溃"。</li>
+      <li><strong>绝不把实时构建输出接管道过滤</strong>（会吞掉失败信号）。正确做法：整段重定向到日志文件，结束后再 grep <code>FAILED|error C|LNK</code>。</li>
+      <li><strong>整文件重写后</strong>，链接前先 grep 确认头文件声明的每个符号在源文件里都有定义体（曾发生 AIChatComplete 函数体被重写弄丢，4000+ 目标文件白编译才在链接期暴露）。</li>
+      <li><strong>exe 被占用时先问维护者，绝不直接杀进程。</strong>约定流程：请求关闭实例 → 等待回复"已关闭" → 再链接。维护者常在另一台实例里挂着未保存的字幕。</li>
+    </ul>
+  </div>
+
+  <h3>本地化的编译进链</h3>
+  <p>顶层 <code>meson.build</code> 新增 <code>custom_target('zh_CN-catalog')</code>：用 <code>tools/compile_po.py</code>（纯 Python PO→MO，替代 Windows 缺失的 msgfmt）把 <code>po/zh_CN.po</code> 编成 <code>aegisub-zh_CN.mo</code>，<code>build_by_default</code> 且加入 exe 的 <code>link_depends</code>，并复制到 <code>po/zh_CN/LC_MESSAGES/aegisub.mo</code> 供 wxWidgets 按标准布局查找。<code>po/meson.build</code> 本身没有内容改动。</p>
+  <p>相关：README 新增 macOS 的"带 FFmpeg 家族编解码"构建段（AV1 靠内嵌 dav1d、VP9 靠内嵌 FFmpeg，纯解码侧），配套 <code>subprojects/checkasm.wrap</code> 是 wrap-redirect 存根，指向 dav1d 内的 checkasm 依赖，让子项目回退的 FFmpeg 构建不再报缺 wrap。</p>
+</section>
+
+<!-- ============ 规范 ============ -->
+<section class="chapter" id="conventions">
+  <p class="eyebrow">02 · CONVENTIONS</p>
+  <h2>开发规范与约定</h2>
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>约定</th><th>做法</th><th>原因</th></tr></thead>
+    <tbody>
+      <tr><td>UI 全简体中文</td><td>新字符串 <code>STR_MENU("区域截图翻译")</code>、消息框等直接用中文 msgid / 硬编码中文 + <code>to_wx()</code></td><td>未翻译时 gettext 原样返回 msgid，即显示中文；避免每次都改 po 造成大 diff。集中翻译由 <code>po/zh_CN.po</code> 批量补录</td></tr>
+      <tr><td>字符串转换</td><td>只用 <code>to_wx(std::string)</code> / <code>from_wx(wxString)</code>；禁止对临时对象用 <code>ToUTF8()</code></td><td>wx 3.2 的 <code>ToUTF8()</code> 返回带悬垂 string_view 风险，历史上真实崩溃过</td></tr>
+      <tr><td>撤销体系</td><td>改文本 <code>COMMIT_DIAG_TEXT</code>、改时间 <code>COMMIT_DIAG_TIME</code>、改样式 <code>COMMIT_STYLES</code>、排序 <code>COMMIT_ORDER</code>；批量操作只 Commit 一次</td><td>审校工作流依赖一次 Ctrl+Z 回到改动前；一次批量一个撤销点</td></tr>
+      <tr><td>后台线程</td><td>网络/解码走 <code>agi::dispatch::Background().Async</code>，结果回投 <code>Main().Async</code>；用 <code>shared_ptr&lt;atomic&lt;bool&gt;&gt;</code> 的 alive/cancel 双标志防护</td><td>模态框销毁后迟到的回调必须无害；取消通过 curl 进度回调实现</td></tr>
+      <tr><td>无成功弹窗</td><td>操作成功用状态文字/日志窗口反馈；仅错误与危险操作用对话框</td><td>维护者明确要求，高频操作弹窗是灾难</td></tr>
+      <tr><td>密钥/凭据</td><td>一律用户配置（<code>%APPDATA%</code>），仓库只见空默认值</td><td>见安全红线</td></tr>
+      <tr><td>wx 3.2.12 细节</td><td>事件处理签名用 <code>wxCommandEvent&amp;</code>（无 wxButtonEvent）；裁剪图像用 <code>wxImage::GetSubImage</code>（无 Crop）；内存流用 <code>GetLength()+CopyTo()</code>（无 GetBuf）</td><td>子项目 wx 版本固定，踩过一轮编译错</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ============ 功能详解 ============ -->
+<section class="chapter" id="features">
+  <p class="eyebrow">03 · FEATURES</p>
+  <h2>功能改动详解（F01–F10）</h2>
+
+  <!-- F01 -->
+  <div class="feat" id="f01">
+    <div class="feat-head"><span class="fid">F01</span><h4>倍速播放（变速不变调）</h4></div>
+    <div class="blk note">
+      <span class="tag">动机</span>
+      <p>审校听译时需要 2×/4× 快速过一遍音轨，同时保持音调可辨。原 Aegisub 完全没有变速能力。</p>
+    </div>
+    <p><strong>交互：</strong>视频工具栏播放键后内嵌一个 <code>wxChoice</code> 下拉（0.5x / 1x / 2x / 4x），初始档位从存储速度换算；tooltip 注明"声音跟随，其他速率保持音调"。</p>
+    <p><strong>视频时钟：</strong><code>VideoController</code> 的 10ms 定时器改为虚拟时间轴 <code>virtual_ms = start_ms + elapsed * play_speed</code>；<code>SetSpeed()</code> 在<strong>当前显示帧重新锚定</strong>时钟（<code>start_ms = TimeAtFrame(frame_n)</code> 加重置起点），播放中变速不跳画面，并把持久化写进 <code>Tool/Playback/Play Speed</code>（百分数，钳 25–400）。</p>
+    <p><strong>音频链路：</strong><code>AudioPlayer</code> 基类新增虚函数 <code>SetSpeed(double)</code>，默认实现返回 <code>speed==1.0 ? 1.0 : 0.0</code>——<strong>0 表示"不支持"</strong>，调用方策略是<strong>宁可不发音，也不让声画漂移</strong>（<code>Play()/PlayLine()/SetSpeed()</code> 收到 ≤0 就 Stop 音频而不是继续旧速度）。</p>
+    <p><strong>DirectSound2 播放器的真实现（本功能核心，+379 行）：</strong>首选内建 <code>TimeStretchEngine</code>——流式 WSOLA 时距伸缩，直接从 <code>agi::AudioProvider</code> 读样本：hop≈20ms、Hann 窗 50% 重叠、在 ±search 范围用 SSD 搜最佳拼接点再 overlap-add 合成，变速同时保持音调；支持 int16/int32/float。设备缓冲加 <code>DSBCAPS_CTRLFREQUENCY</code> 作为后备路径（频率整体平移，会变调，超出 DSBFREQUENCY 范围时拒绝并返回 0）。线程与 UI 用 Win32 event + <code>pending_speed</code> 握手重启播放。伸缩模式下播放位置按输入游标（<code>stretcher.Cursor()</code>）折算回时间轴。</p>
+    <p><strong>新建播放器时</strong>（切换音频设备/文件），<code>AudioController::OnAudioPlayerChanged</code> 立即把存储倍速套到新播放器上。</p>
+    <div class="tblwrap"><table>
+      <thead><tr><th>涉及文件</th><th>角色</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/audio_player_dsound2.cpp</code></td><td>TimeStretchEngine + 线程变速握手</td></tr>
+        <tr><td><code>src/video_controller.{h,cpp}</code></td><td>虚拟时钟、SetSpeed、持久化</td></tr>
+        <tr><td><code>src/audio_controller.{h,cpp}</code>、<code>src/include/aegisub/audio_player.h</code></td><td>能力协商接口</td></tr>
+        <tr><td><code>src/toolbar.cpp</code></td><td>wxChoice 控件与档位映射</td></tr>
+      </tbody>
+    </table></div>
+    <div class="blk warn"><span class="tag">坑</span>
+      <ul>
+        <li>非 DirectSound2 播放器（如 DSOUND 旧实现）不支持变速——表现是倍速下<strong>静音</strong>而非变调，这是刻意设计。</li>
+        <li><code>Populate()</code> 会销毁工具栏控件，<code>speed_choice</code> 指针必须置空再重建，否则悬垂。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- F02 -->
+  <div class="feat" id="f02">
+    <div class="feat-head"><span class="fid">F02</span><h4>字幕审校模式（Review Mode）</h4></div>
+    <div class="blk note"><span class="tag">动机</span>
+      <p>逐行审校节奏：播当前行（前后各留 1 秒）、进编辑框自动暂停、改完可选择自动重播、表格里高亮"正在播的行"和"时间重叠的行"。原 Aegisub 一切换选中行就打断播放。</p>
+    </div>
+    <p><strong>命令与入口：</strong><code>review/mode</code>（开关，视频工具栏按钮）、<code>review/play_pause</code>（继续/暂停且<strong>不动当前行</strong>）、<code>review/preview</code>（预览当前字幕）。快捷键迁移：默认把 <code>Ctrl-P</code> 从 <code>video/play</code> 换成 <code>review/play_pause</code>、<code>Ctrl-Shift-P</code> 绑定预览（一次性迁移 <code>"review playback controls"</code>，已自定义 Ctrl-P 的用户不动）。</p>
+    <p><strong>VideoController 新增状态机：</strong><code>review_mode / review_preview / review_was_playing / review_saved_frame / focus_paused / review_edit_time</code>，信号 <code>ReviewModeChange</code> 供 base_grid、subs_edit_box、video_box 订阅。<code>OnActiveLineChanged</code> 在审校模式下跳过 Stop+JumpToTime（这是"切换选中不打断播放"的实现点）。<code>Stop()</code> 在预览中会转为取消预览。</p>
+    <p><strong>预览一条字幕：</strong><code>PlayReviewPreview(start,end,AssFile*)</code> 把当前内存字幕文件（含未保存修改）塞进视频 provider，播 <code>[start−1s, end+1s]</code>，结束或取消时 <code>FinishReviewPreview()</code> 恢复 provider 的常规字幕源并跳回原帧。可重入（预览中再预览不丢初始状态）。</p>
+    <p><strong>焦点联动：</strong>编辑框侧 <code>subs_edit_box</code> 用 120ms <code>wxTimer</code> 轮询 <code>wxWindow::FindFocus()</code> 上溯父链判断焦点是否在编辑区/音频盒（注释说明：Scintilla 原生控件会吞 SET/KILL_FOCUS，只能轮询），焦点入→视频自动暂停，焦点出→从暂停帧续播；若期间该行内容被提交过（<code>review_edit_time</code> 有值）且开了"改后重播"，先 seek 到该时间再播。</p>
+    <p><strong>视频盒三个审校专属按钮</strong>（<code>video_box.cpp</code>，默认隐藏）：预览±1秒（跑 <code>PlayReviewPreview</code>）、重叠高亮开/关、改后重播开/关；进入审校模式还会把 <code>video/opt/autoscroll</code> 工具栏按钮隐藏（依赖 F10 的 <code>toolbar::SetCommandVisible</code>）。</p>
+    <p><strong>网格高亮（base_grid）：</strong>正在播放的行琥珀底 <code>255,222,150</code> + 2px 描边 <code>230,135,20</code>；重叠行粉底 <code>255,218,222</code>；开启重叠高亮时活动行及其碰撞行加 <code>232,133,140</code>。重叠映射 <code>UpdateOverlapRows()</code> 按起止时间扫描线标记，时间编辑提交（COMMIT_DIAG_TIME）后即时刷新。优先级：选中 &gt; 播放行 &gt; 注释行。</p>
+    <div class="blk warn"><span class="tag">坑</span>
+      <ul>
+        <li>高亮颜色硬编码在 <code>UpdateStyle</code>，不走设置项——后续如需主题化从这里入手。</li>
+        <li><code>PlaybackChange</code> 信号已定义并多处触发，但目前全树无消费者，属预留接口。</li>
+        <li><code>frame_main</code> 析构新增 <code>videoController-&gt;Stop()</code>：退出时先让审校预览恢复常规字幕源，否则 provider 与观察者析构顺序会崩（F10 关联）。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- F03 -->
+  <div class="feat" id="f03">
+    <div class="feat-head"><span class="fid">F03</span><h4>自动对帧（Frame Match：拖框 + 匹配 + 批量提速）</h4></div>
+    <div class="blk note"><span class="tag">动机</span>
+      <p>烧录字幕（硬字幕）视频里，把字幕行的起止时间对齐到画面上字幕实际出现/消失的帧。人工逐帧找太慢，改为：在视频上拖一个紧贴字幕文本的框 → 对当前行自动找出现区间；选中多行可批量。</p>
+    </div>
+    <p><strong>入口：</strong>视频工具 <code>video/tool/frame_match</code>（工具栏按钮 + 菜单"对帧助手"，二次按下退回十字工具），批量命令 <code>video/tool/frame_match_batch</code>（需视频 provider + 非空网格选区，走静态 <code>VisualToolTimingRegion::BatchMatchSelection()</code>）。参考帧 = <strong>当前显示帧</strong>，用户要先停在字幕可见的帧再拖框。</p>
+    <p><strong>匹配算法</strong>（<code>visual_tool_timing_region.cpp</code>，核心 <code>MatchLineToRegion()</code>）：</p>
+    <ul>
+      <li>区域按脚本分辨率→归一化坐标→采样为 ≤320×128 的网格（<code>GetEffectiveLayoutResolution</code> 处理脚本/视频分辨率差异；<code>frame-&gt;flipped</code> 已处理）。</li>
+      <li>双极性二值掩码：亮字（luma≥215 或 RGBmax≥180 且 chroma≥90）与暗字（luma≤60），兼容白字和黑描边字。</li>
+      <li>相似度用 Dice：同位置 <code>200·|交| / (|参考|+|当前|)</code>。</li>
+      <li><strong>抗干扰：</strong>±6 秒按约 1 秒取样做"持久性扫描"，点亮率 ≥85% 的格子判为台标/横幅等静态元素剔除；参考帧图案至少 12 个有效格才开跑。</li>
+      <li>粗搜 ±10 秒、步长约 0.5 秒，命中后对出现/消失边界逐帧前进细修（所有扫描均为<strong>前进单程</strong>，配合软解关键帧 seek 的特性调优）。</li>
+    </ul>
+    <p><strong>批量提速机制</strong>（此前需求单上的"顺序预取提速""批量接缝链接"就落在这里，<em>不在</em> async provider——视频解码器本身有缓存）：</p>
+    <ul>
+      <li>按时间排序处理；跨行共享 <code>MaskCache</code>（≤384 帧 LRU），后续行直接搭已解码帧的前程。</li>
+      <li>链式提示：上一行结束与新行预期开始相差 ±1.5 秒内时，只探接缝附近 3 帧，≥3 次命中才收窄窗口（错链代价大，宁可回退宽搜）。</li>
+      <li>冲突消解两轮：移动后互相重叠的行，以 <code>min(95, 基准相似度 + 轮次×重跑步长)</code> 重配准，邻行 ±80ms 边界钳制；结果退化的行回滚原时间。</li>
+      <li>提交一次 <code>"batch match subtitle timings"</code>（COMMIT_DIAG_TIME），可撤销；进度框可中止（status 枚举含 Cancelled）。</li>
+    </ul>
+    <p><strong>阈值设置 UI：</strong>视频属性对话框新增 Frame Match Assistant 分栏：最小相似度 %（25–95，默认 70）、重跑步长 %（5–30，默认 15），点确定才落 OPT。</p>
+    <p><strong>区域持久化：</strong>四个 double 选项 <code>Tool/Frame Match/Region X0/Y0/X1/Y1</code>（−1 = 未框选），Esc/右键只清当前橡皮筋不清已保存区域。<strong>AI 截图翻译直接复用这个区域</strong>（F08），这是当初"复用自动对帧交互"决策的落点。</p>
+    <div class="blk warn"><span class="tag">坑</span>
+      <ul>
+        <li>批量模式内层 <code>try_match</code> 异常被静默吞掉继续下一行——排障时先看进度文本再看日志。</li>
+        <li>单行匹配的进度总量是硬编码估计（66 样本），不是精确值。</li>
+        <li>键盘事件钩子：工具消费按键依赖新加的 <code>VisualToolBase::OnKeyDown</code> 虚函数（F10），帧匹配期间按 Esc 取消由这条链驱动。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- F04 -->
+  <div class="feat" id="f04">
+    <div class="feat-head"><span class="fid">F04</span><h4>样式特效：多层描边 / 外发光 / 淡入淡出（Style FX）</h4></div>
+    <div class="blk note"><span class="tag">动机</span>
+      <p>字幕组的标题字常需要 2–32 层渐宽描边、外发光、整行淡变。ASS 样式只支持单层 \3c/\4c/\bord/\shad。方案：把这些做成 <strong>Aegisub 私有样式扩展</strong>，编辑时内部模拟渲染，保存/导出时"展开"成普通 ASS 也能播的堆叠事件。</p>
+    </div>
+    <p><strong>数据模型（ass_style.h/cpp）：</strong><code>AssStyle</code> 新增 <code>strokes</code>（vector：width/blur/color）、<code>glow_enabled/glow_width/glow_blur/glow_color</code>、<code>fade_in_ms/fade_out_ms</code>；序列化 <code>GetFxData/SetFxData</code> 为带版本号 CSV（当前 v3：全局发光 + 淡变 + n 层描边；兼容读 v1 单层/v2 渐变弃用；字段数严格校验，坏数据静默忽略）；<code>HasStyleFx()</code> 判任一特效存在。</p>
+    <p><strong>编辑 UI（dialog_style_editor）：</strong>右侧新增 "Layer Styles" 分组：描边行动态增删（各层颜色/宽/模糊，上限 32）、外发光开关与颜色/宽/模糊、淡入/淡出 ms（0–10000）。预览即时刷新（spin-double 事件显式绑定取代了原 OnChildFocus 方案）。</p>
+    <p><strong>展开/折叠（ass_style_fx.h/cpp，核心新模块）：</strong></p>
+    <ul>
+      <li><code>ExpandStyleEffects(AssFile&amp;, bool markers)</code>：每个 FX 行复制成"最宽描边在底 … 正文在最上"的事件栈；自动生成样式命名 <code>__AegisubFx_&lt;id&gt;_&lt;base|glow|strokeN&gt;</code>；描边层用 <code>{\1a&amp;HFF&amp;\2a&amp;HFF&amp;\4a&amp;HFF&amp;}</code> 遮填充只留描边，模糊转 <code>{\blur}</code>，淡变转 <code>{\fad}</code>；各层按对齐方式计算 <code>{\pos}</code> 钉死位置（文本已有 \pos/\move 则整体跳过）。<code>markers=true</code> 时每层前插一条 <code>Comment "AegisubFxGroupV1:n:…"</code> 记录原行。</li>
+      <li><code>CollapseStyleEffects(AssFile&amp;)</code>：加载时识别标记注释，把事件栈收回为原始单行并删除生成样式；坏标记原样保留。收回发生在 <code>subtitle_format_ass.cpp</code> 的 ReadFile。</li>
+      <li><strong>渲染路径</strong>（预览/视频）以 <code>markers=false</code> 展开：subs_preview、async_video_provider（ProcFrame 两个分支 + GetSubtitles，均为复制 AssFile 后展开）。<strong>保存/导出</strong>以 <code>markers=true</code> 展开，因此外部播放器看到的是等价但行数更多的普通 ASS。</li>
+    </ul>
+    <p><strong>持久化：</strong>.ass 文件把特效写进 Script Info 条目 <code>Aegisub Style FX = &lt;编码样式名&gt;,&lt;fxdata&gt;</code>；样式存储文件（AssStyleStorage）在每个样式后插一行 <code>;AegisubStyleFX:&lt;encoded&gt;</code>。两者对外部 ASS 解析器都是可忽略注释/键。</p>
+    <div class="blk warn"><span class="tag">坑</span>
+      <ul>
+        <li>展开会改变事件数与 layer 值（组内重排，组外不动）——diff/审校比对时注意。</li>
+        <li>async_video_provider 每次（重）载字幕都做整 AssFile 深拷贝展开，大文件 + 频繁切换字幕源时有性能成本；逐帧脏标记路径未变。</li>
+        <li>注释行与无特效行完全透传。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- F05 -->
+  <div class="feat" id="f05">
+    <div class="feat-head"><span class="fid">F05</span><h4>样式管理器：删除未使用的样式</h4></div>
+    <p>样式管理器当前样式表侧新增按钮 <strong>"删除未使用的样式"</strong>（中文标签硬编码，tooltip 说明注释行与 <code>{\r名称}</code> 也算引用）。<code>OnCurrentPurge()</code>：扫描所有事件 Style 字段 + 手写解析行内 <code>\r</code> 换样式标签；<code>Default</code> 无条件保留；无删项提示、全删光拒绝、确认框最多列 20 个名字；删除走 <code>delete style</code>（AssEntryListHook 自动摘链）后 <code>COMMIT_STYLES</code> 提交，<strong>可撤销</strong>。与 F04 的 ass_style_fx 无关。</p>
+  </div>
+
+  <!-- F06 -->
+  <div class="feat" id="f06">
+    <div class="feat-head"><span class="fid">F06</span><h4>批量预设 / 删除标签</h4></div>
+    <p>字幕菜单新增子菜单 <strong>Batch Override Tags</strong>（Windows 与 macOS 菜单都挂了）：</p>
+    <ul>
+      <li><code>edit/batch/apply_tags</code> 批量预设标签…：输入如 <code>\bord4\shad2</code>；对每个选中行，先删除覆盖块里<strong>同名</strong>标签再把新标签注入首个 override 块（无则新建），一次 <code>COMMIT_DIAG_TEXT</code>。用途：给选中行统一"换"描边/阴影值。</li>
+      <li><code>edit/batch/remove_tags</code> 批量删除标签…：空格分隔标签名清单，跨全部覆盖块按名删除。</li>
+    </ul>
+    <p>需非空选区才可用（COMMAND_VALIDATE）。这是"合并行"需求排查后的确认结论：<strong>合并不在 C++ 侧</strong>，由 Lua 的 automerge / shift_content 覆盖（见第 04 章）。</p>
+  </div>
+
+  <!-- F07 -->
+  <div class="feat" id="f07">
+    <div class="feat-head"><span class="fid">F07</span><h4>新增排序：CPS / 字数</h4></div>
+    <p><code>AssFile</code> 新增比较器 <code>CompCPS</code>（字符数 ÷ 时长，整数交叉相乘避免浮点误差；字符统计尊重既有"忽略空白/忽略标点"设置并按渲染文本计；非法时长行沉底）与 <code>CompTextLength</code>。四个命令（全表/仅选中 × CPS/字数）进"排序"两个子菜单，提交 <code>COMMIT_ORDER</code>。用途：把压 CPS 的行排到一起集中改写。</p>
+  </div>
+
+  <!-- F08 -->
+  <div class="feat" id="f08">
+    <div class="feat-head"><span class="fid">F08</span><h4>AI 内嵌翻译（阿里百炼 DashScope）</h4></div>
+    <div class="blk note"><span class="tag">动机</span>
+      <p>旧 Lua 原型（AI辅助翻译.lua）经外部进程调 ffmpeg，链路长且脆。经评估改为原生内嵌（维护者拍板"直接开工内嵌版"）：截图走内存帧缓冲，音频走 AudioProvider 切片，网络走已在构建内的 libcurl。Lua 版保留对照至稳定后删除。</p>
+    </div>
+    <p><strong>入口：</strong>字幕菜单两项（自动置灰逻辑：截图翻译需视频 provider；音频翻译需音频 provider + 非空选区），命令在 <code>command/ai.cpp</code>，全部实现在 <code>ai_assistant.cpp</code>（约 915 行，含对话框与 curl 层）。</p>
+    <p><strong>接口约定：</strong>OpenAI 兼容 <code>POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions</code>。视觉消息 = <code>image_url</code>(<code>data:image/png;base64,…</code>) + text；音频消息 = <code>input_audio</code>(<code>data:;base64,WAV</code>, format wav) + text；模型名含 "omni" 必须 <code>stream:true</code>，按 SSE <code>data: …</code> 行拼接 <code>choices.0.delta.content</code> 直到 <code>[DONE]</code>。提示词与 Lua 版逐字一致（<code>原文=… 译文=…</code> 格式 + 同套 extract_translation 提取兜底，保证两版输出可对照）。</p>
+    <p><strong>功能 1 区域截图：</strong>主线程抓当前帧（<code>AsyncVideoProvider::GetFrame(frame, time, raw)</code> → wxImage），按百分比裁剪（默认读 F03 的 Frame Match 区域，面板区域四项可改）、>1280 宽则缩放、PNG 编码 → base64 → 后台线程请求。结果"原文/译文"两个可编辑框，"写入当前行"→ <code>line-&gt;Text = …</code>（换行转 <code>\N</code>）→ <code>COMMIT_DIAG_TEXT</code>。</p>
+    <p><strong>功能 2 音频翻译：</strong>每条选中行按 <code>[start−PadStart, end+PadEnd]</code> 从 <code>agi::AudioProvider</code> 取样本，内存里降混单声道 + 线性重采样 16k + 拼 WAV 头（不依赖 ffmpeg；provider 本身带锁线程安全），逐条串行请求，进度"第 d/N 条完成"，汇总可编辑框；"写入选中行"按【第N条 h:m:s】块解析回填。</p>
+    <p><strong>线程与生命周期：</strong>模态框（ShowModal）保证请求期间项目/视频/音频对象不会变化；<code>alive_/cancel_</code> 为 <code>shared_ptr&lt;atomic&lt;bool&gt;&gt;</code>，后台结果回投主线程前一律查 <code>!*</code>alive 直接丢弃；取消按钮置 cancel，curl 的 <code>XFERINFOFUNCTION</code> 轮询它；运行中点关闭会被 veto（提示"正在取消后台任务，请稍候…"），"强制关闭"按钮直接 EndModal；析构兜底置位双标志。</p>
+    <p><strong>配置与密钥：</strong><code>Tool/AI/*</code> 12 个键（见第 05 章）。密钥输入框 <code>wxTE_PASSWORD</code> 打码；密钥为空时自动读 <code>%APPDATA%\ai_translate.conf</code> 的 <code>api_key=</code> 行继承 Lua 版配置。区域/模型/语言改动即时写回 OPT。</p>
+    <p><strong>错误话术（全部中文、面向操作者）：</strong>401→"API 密钥无效…"；403→"模型未开通：…请到百炼控制台「模型广场」开通该模型后重试"；429→频率/额度；网络失败→"请检查网络或代理"；SSE 空内容/JSON 异常附原始响应前 300 字符。</p>
+    <div class="blk warn"><span class="tag">坑</span>
+      <ul>
+        <li>libcurl 依赖挂靠在 <code>enable_update_checker</code> 之下（<code>WITH_UPDATE_CHECKER</code> 宏 + curl 进全局 deps）。本构建开启；若关掉的配置编 AI 功能，代码用 <code>#ifndef</code> 分支给中文提示"此版本编译时未启用网络支持"。</li>
+        <li>抓帧刻意留在主线程（一次取一帧，短阻塞），避免与视频显示的 provider 竞态；只有网络与 WAV 组装进后台。</li>
+        <li>rsp 清单已含 <code>src_ai_assistant.cpp.obj</code> 与 <code>src_command_ai.cpp.obj</code>——新增 AI 相关源文件时记得同步。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- F09 -->
+  <div class="feat" id="f09">
+    <div class="feat-head"><span class="fid">F09</span><h4>字幕格式审查（载入失败诊断报告）</h4></div>
+    <p><code>subtitle_format_audit.{h,cpp}</code>：不是对当前文档的体检，而是 <strong>.ass/.ssa/.srt 载入抛错时的验尸报告</strong>。<code>project.cpp::DoLoadSubtitles</code> 两个 catch 分支先试 <code>ShowSubtitleFormatAudit()</code>——用相同编码重读原文逐行审计（ASS：节感知、样式字段数 23/18、数值列、&amp;H 颜色格式、时间格式与 End≤Start、未知样式引用、U+FFFD 乱码；SRT：时间行、范围、End≤Start、空文本；都找不到就回抛解析器错误行），弹"字幕格式审查"对话框（级别/行号/问题/建议修复列表 + 原始错误），返回 true 则跳过通用报错。全程只读，文档不变。</p>
+    <p>诊断文案直接硬编码中文 msgid（po 里已录约 33 条对应条目）。</p>
+  </div>
+
+  <!-- F10 -->
+  <div class="feat" id="f10">
+    <div class="feat-head"><span class="fid">F10</span><h4>修复与基础设施清单</h4></div>
+    <div class="tblwrap"><table>
+      <thead><tr><th>#</th><th>位置</th><th>问题 → 修复</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">1</td><td><code>libaegisub/windows/path_win.cpp</code></td><td>一行级关键 bug：<code>?data</code> 目录 token 原来解析成 <strong>exe 文件自身路径</strong>（GetModuleFileNameW 含文件名），所有 <code>?data/…</code> 派生路径（词典、locale）失效 → 改 <code>.parent_path()</code></td></tr>
+        <tr><td class="mono">2</td><td><code>src/aegisublocale.cpp</code></td><td>Windows 开发构建启用 <code>P_LOCALE</code> 编译期路径，并额外搜索 <code>?data/po/</code> 布局——修"zh_CN 翻译加载不到"</td></tr>
+        <tr><td class="mono">3</td><td><code>src/video_display.cpp</code></td><td><code>glViewport</code> 移到 <code>videoOut-&gt;Render</code> 之前：原顺序新帧沿用上一个（常为 1×1）视口，画面错位/不刷新</td></tr>
+        <tr><td class="mono">4</td><td><code>src/video_provider_ffmpegsource.cpp</code></td><td>时码表生成从截断改为 <code>long double</code> + <code>llround</code>（60fps 下截断让每帧偏早近 1ms）+ 越界抛 <code>VideoOpenError</code>。对帧/预览的帧↔毫秒精度受益</td></tr>
+        <tr><td class="mono">5</td><td><code>src/subs_preview.{h,cpp}</code></td><td>样式预览对话框崩溃与裁切修复：成员改 unique_ptr 且样式整体替换（防陈旧 AssEntry 字符串池）；每次渲染重建快照 AssFile（provider 不再拿到已拆除节点）；PlayRes 固定高 288 按比例换算（原来按控件像素当分辨率，大字号被裁）；显式绑定 Default 样式</td></tr>
+        <tr><td class="mono">6</td><td><code>src/frame_main.cpp</code></td><td>析构先 <code>videoController-&gt;Stop()</code> 再关音视频：审校预览态退出时 provider/观察者析构顺序崩溃</td></tr>
+        <tr><td class="mono">7</td><td><code>src/subs_edit_box.cpp</code></td><td>撤销合并定时器绑定歧义修复（显式 <code>undo_timer.GetId()</code>，原来任何定时器都会触发）</td></tr>
+        <tr><td class="mono">8</td><td><code>src/visual_tool.h</code> + <code>video_display.cpp</code></td><td>新钩子 <code>virtual bool OnKeyDown(wxKeyEvent&amp;)</code>：可视工具可在快捷键系统前吃掉按键（F03 的 Esc/方向键基础）</td></tr>
+        <tr><td class="mono">9</td><td><code>src/toolbar.cpp</code> + <code>include/aegisub/toolbar.h</code></td><td>新公共 API <code>toolbar::SetCommandVisible(toolbar, command, bool)</code>（动态工具栏按命令隐藏按钮；非动态实现静默 no-op）——审校模式隐藏 autoscroll 用</td></tr>
+        <tr><td class="mono">10</td><td>顶层 <code>meson.build</code> + <code>tools/compile_po.py</code> + <code>subprojects/checkasm.wrap</code></td><td>构建链：PO→MO 内置编译进链接依赖；dav1d 的 checkasm wrap 重定向（README 新增的捆绑 FFmpeg/dav1d 构建路径所需）</td></tr>
+        <tr><td class="mono">11</td><td><code>src/libresrc/default_config.json</code></td><td>新增三组默认值（见第 05 章）。用户配置合并于默认之上，旧配置用户自动获得新键，无迁移成本</td></tr>
+        <tr><td class="mono">12</td><td><code>po/zh_CN.po</code></td><td>+98 条新 msgid 的译稿（对帧助手、格式审查、倍速、AI 提示等，含约 33 条中文原文 msgid 的对应条目）、7 处复数句质量修正、metainfo Keywords 填充。注意大量新 UI 走"中文 msgid 原样显示"，并不依赖 po</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</section>
+
+<!-- ============ Lua ============ -->
+<section class="chapter" id="lua">
+  <p class="eyebrow">04 · AUTOMATION</p>
+  <h2>Lua 自动化脚本（automation/autoload/）</h2>
+  <p>六个脚本均为 autoload，出现在"自动化"菜单。与 C++ 功能有重叠的：AI 辅助翻译（被 F08 取代，保留对照）、边框添加（与 F04 思路不同——它用堆行实现，F04 用样式扩展）。都未入库（untracked），交接时注意别漏拷。</p>
+  <div class="tblwrap"><table>
+    <thead><tr><th>脚本</th><th>做什么</th><th>关键逻辑 / 注意</th></tr></thead>
+    <tbody>
+      <tr><td><code>AI辅助翻译.lua</code></td><td>百炼截图/音频翻译原型</td><td>外部 ffmpeg 切音频、子进程 curl。语义（提示词、原文=/译文=提取）已被 F08 逐字移植。<strong>内嵌版稳定后删除</strong>；它也是 <code>%APPDATA%\ai_translate.conf</code> 的写入方</td></tr>
+      <tr><td><code>automerge.lua</code></td><td>去除间隙并拼接（增强版）v1.1</td><td>选区≥2 行按时间序，相邻间隙 ∈ (0, 阈值(默认500ms)] 时按模式下格提前/上格延后使其相接；重叠与超 max_extend 跳过。一个撤销点。只动时间轴不合并文本</td></tr>
+      <tr><td><code>shift_content.lua</code></td><td>智能内容平移（修复版）v3.0</td><td>把选中行的 文本/样式/演员/效果/layer 内容整体平移 N 行（修译错行的 QA 工具），时间不动；目标被非选中行占用时插入 0 时长新行。自底向上应用保持索引有效</td></tr>
+      <tr><td><code>一键导出选中行音频v2.2.lua</code></td><td>选中行音频切片导出</td><td>连续选中行合并为一段；前后延长默认 300ms；调 PATH 里的 ffmpeg（阻塞、返回码未检查）输出 <code>…_第【N】【M】行.mp3/.wav</code>。F08 音频翻译<strong>不用</strong>它这条链路</td></tr>
+      <tr><td><code>中文标点转英文标点.lua</code></td><td>全角标点转半角</td><td>手写 UTF-8 解码逐字符映射；固定转换集 + 可选项（省略号/书名号/方括号默认开，引号/破折号默认关）；跳过 <code>{…}</code> 覆盖块；作用域选全部/选中，可含注释行</td></tr>
+      <tr><td><code>自动化边框添加v1.lua</code></td><td>按样式命名约定堆叠多层边框</td><td>样式名 <code>主体-1/-2/-3…</code>，最小号=正文，其余为内→外边框层；命中正文样式的行复制多份、layer 递增。不生成任何 \pos 边框标签，边框外观取决于边框样式自身的 \3c/\1a 设置。会覆写命中行 layer</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ============ 配置键 ============ -->
+<section class="chapter" id="options">
+  <p class="eyebrow">05 · OPTIONS</p>
+  <h2>配置键参考（全部新增键）</h2>
+  <p>存于 <code>%APPDATA%\Aegisub\aegisub.jscript/settings</code> 之外的用户 JSON 设置；默认值见 <code>src/libresrc/default_config.json</code>。</p>
+  <div class="tblwrap"><table>
+    <thead><tr><th>键</th><th>类型 / 默认</th><th>含义</th><th>读写方</th></tr></thead>
+    <tbody>
+      <tr><td><code>Tool/Playback/Play Speed</code></td><td>int · <code>100</code></td><td>倍速百分数，钳 25–400（0.25×–4×）</td><td>VideoController 读写；toolbar 初始档位；新建播放器即读</td></tr>
+      <tr><td><code>Tool/Playback/Review Replay After Edit</code></td><td>bool · <code>false</code></td><td>审校模式：改完该行离开编辑框后自动重播</td><td>VideoBox 按钮翻转；OnEditAreaFocus 读</td></tr>
+      <tr><td><code>Tool/Frame Match/Minimum Similarity</code></td><td>int · <code>70</code></td><td>对帧匹配最小相似度 %（25–95）</td><td>视频属性对话框设置；匹配读取</td></tr>
+      <tr><td><code>Tool/Frame Match/Rerun Step</code></td><td>int · <code>15</code></td><td>批量冲突重跑时每轮相似度增量 %（5–30，上限 95）</td><td>同上</td></tr>
+      <tr><td><code>Tool/Frame Match/Region X0/Y0/X1/Y1</code></td><td>double · <code>-1.0</code></td><td>拖框区域（0–1 归一化坐标，−1 = 未框选）</td><td>对帧工具保存；AI 截图翻译 ×100 换算成百分比后作为默认裁剪区读取</td></tr>
+      <tr><td><code>Tool/AI/API Key</code></td><td>string · <code>""</code></td><td>百炼密钥。<strong>永不提交入库</strong></td><td>AI 对话框；首启可从 <code>%APPDATA%\ai_translate.conf</code> 继承</td></tr>
+      <tr><td><code>Tool/AI/Vision Model</code></td><td>string · <code>"qwen3.8-flash"</code></td><td>截图识别/翻译模型</td><td>AI 对话框</td></tr>
+      <tr><td><code>Tool/AI/Audio Model</code></td><td>string · <code>"qwen3.8-omni-flash"</code></td><td>音频模型（含 "omni" 自动切 SSE 流式）</td><td>AI 对话框</td></tr>
+      <tr><td><code>Tool/AI/Target Lang</code></td><td>string · <code>"简体中文"</code></td><td>目标语言</td><td>AI 对话框</td></tr>
+      <tr><td><code>Tool/AI/Region X0/Y0/X1/Y1</code></td><td>double · <code>0 / 70 / 100 / 100</code></td><td>截图裁剪百分比（默认沿用画面下部字幕区）</td><td>AI 对话框；初始值优先取 Frame Match 区域</td></tr>
+      <tr><td><code>Tool/AI/Pad Start · Pad End</code></td><td>int · <code>300</code> (ms)</td><td>音频切片前后延长</td><td>AI 对话框</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ============ 命令 ============ -->
+<section class="chapter" id="commands">
+  <p class="eyebrow">06 · COMMANDS</p>
+  <h2>命令 / 菜单 / 工具栏 / 快捷键增量</h2>
+  <div class="tblwrap"><table>
+    <thead><tr><th>命令</th><th>菜单文本</th><th>出现位置</th><th>可用条件 / 备注</th></tr></thead>
+    <tbody>
+      <tr><td><code>video/tool/frame_match</code></td><td>对帧助手（Frame Match Assistant）</td><td>视频工具栏、视频菜单</td><td>需视频 provider；toggle；新图标 <code>frame_match_*.png</code> 五档 DPI</td></tr>
+      <tr><td><code>video/tool/frame_match_batch</code></td><td>批量对帧</td><td>视频工具栏、视频菜单</td><td>需 provider + 非空选区</td></tr>
+      <tr><td><code>review/mode</code></td><td>字幕审校模式</td><td>视频工具栏、视频菜单</td><td>toggle，需载入视频；图标暂借 spellcheck_toolbutton</td></tr>
+      <tr><td><code>review/play_pause</code></td><td>继续或暂停播放（不改行）</td><td>—（快捷键）</td><td><span class="pill">Ctrl-P</span>（迁移自 video/play）</td></tr>
+      <tr><td><code>review/preview</code></td><td>预览当前字幕</td><td>—（快捷键）</td><td><span class="pill">Ctrl-Shift-P</span></td></tr>
+      <tr><td><code>edit/batch/apply_tags</code></td><td>批量预设标签…</td><td>字幕 ▸ Batch Override Tags</td><td>非空选区</td></tr>
+      <tr><td><code>edit/batch/remove_tags</code></td><td>批量删除标签…</td><td>同上</td><td>非空选区</td></tr>
+      <tr><td><code>grid/sort/cps</code>（+/selected）</td><td>按 CPS 排序</td><td>两个排序子菜单</td><td>全表 / 选中</td></tr>
+      <tr><td><code>grid/sort/text_length</code>（+/selected）</td><td>按字数排序</td><td>同上</td><td>—</td></tr>
+      <tr><td><code>ai/frame_translate</code></td><td>区域截图翻译</td><td>字幕菜单（platform）</td><td>需视频 provider</td></tr>
+      <tr><td><code>ai/audio_translate</code></td><td>音频翻译选中行</td><td>字幕菜单（platform）</td><td>需音频 provider + 非空选区</td></tr>
+    </tbody>
+  </table></div>
+  <p>工具栏新增（video 条）：frame_match、frame_match_batch、review/mode、倍速下拉；视频盒隐藏按钮：预览±1秒 / 重叠高亮 / 改后重播（仅审校模式显示）。macOS 菜单只补了 Batch Override Tags 子菜单（AI/对帧未上 mac 菜单）。</p>
+</section>
+
+<!-- ============ 文件索引 ============ -->
+<section class="chapter" id="files">
+  <p class="eyebrow">07 · FILE INDEX</p>
+  <h2>新增文件索引</h2>
+  <p>以下均为 untracked 新文件（提交时请一并加入；带 * 的已在 <code>src/meson.build</code> 与 <code>aegisub-ready.exe.rsp</code> 登记）：</p>
+  <div class="tblwrap"><table>
+    <thead><tr><th>文件</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/ai_assistant.h</code> / <code>*.cpp</code>*</td><td>F08 AI 内嵌翻译全部实现（对话框 + curl 层 + base64/WAV 工具）</td></tr>
+      <tr><td><code>src/command/ai.cpp</code>*</td><td>两个 AI 命令注册 + <code>cmd::init_ai()</code>（command.cpp 调用它）</td></tr>
+      <tr><td><code>src/visual_tool_timing_region.h</code> / <code>*.cpp</code>*</td><td>F03 对帧可视工具 + 批量匹配引擎</td></tr>
+      <tr><td><code>src/ass_style_fx.h</code> / <code>*.cpp</code>*</td><td>F04 样式特效展开/折叠</td></tr>
+      <tr><td><code>src/subtitle_format_audit.h</code> / <code>*.cpp</code>*</td><td>F09 载入失败格式审查</td></tr>
+      <tr><td><code>src/bitmaps/button/frame_match_{16,24,32,48,64}.png</code></td><td>对帧工具图标五档 DPI（manifest.respack 已登记）</td></tr>
+      <tr><td><code>tools/compile_po.py</code></td><td>纯 Python PO→MO 编译器（顶层 meson 的 zh_CN-catalog 用）</td></tr>
+      <tr><td><code>subprojects/checkasm.wrap</code></td><td>wrap-redirect 存根 → dav1d 内自带 checkasm.wrap，捆绑 FFmpeg/dav1d 构建需要</td></tr>
+      <tr><td><code>automation/autoload/…</code>（6 个脚本）</td><td>见第 04 章</td></tr>
+      <tr><td><code>打开本地新版Aegisub.cmd</code>（仓库根）</td><td>启动 build-local\aegisub-ready.exe</td></tr>
+      <tr><td><code>素材/</code>（未跟踪）</td><td>约 108MB 测试视频 + 同名字幕（对帧/AI 功能的实测素材）。<strong>建议加 .gitignore，勿提交</strong></td></tr>
+      <tr><td><code>build-local/</code>（已被 <code>build*/</code> 忽略）</td><td>含 <code>rebuild.cmd</code>、<code>link-ready.cmd</code>、两份 <code>*.exe.rsp</code>、历次构建日志。工具脚本建议择要挪入库外备份，rsp 每次改动记 changelog</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ============ 待办 ============ -->
+<section class="chapter" id="todo">
+  <p class="eyebrow">08 · OPEN ITEMS</p>
+  <h2>已知问题与待办</h2>
+  <div class="blk todo">
+    <span class="tag">TODO · 按优先级</span>
+    <ol>
+      <li><strong>提交拆分：</strong>约 2000 行改动仍全部未提交。建议按本文 F01–F10 + Lua + 构建链分组提交（每组可独立回滚），提交前逐组跑全量构建。</li>
+      <li><strong>百炼音频模型开通：</strong>账号侧在控制台"模型广场"开通 <code>qwen3.8-omni-flash</code>（或 livetranslate），功能 2 才能实测。代码侧 403 已给开通指引。</li>
+      <li><strong>API 密钥轮换：</strong>曾在聊天中暴露，先在百炼控制台换新密钥，再更新 <code>Tool/AI/API Key</code>。仓库与文档永不含密钥。</li>
+      <li><strong>内嵌版实测后删除 Lua 版：</strong>维护者确认 F08 稳定后删 <code>AI辅助翻译.lua</code>。</li>
+      <li><strong>待维护者逐项确认的已交付改动：</strong>停止倍速时预览同步、对帧顺序预取提速（现为 F03 缓存/链式机制）、批量对帧接缝链接、样式管理器删除未使用样式。</li>
+      <li><strong>分发包更新：</strong>桌面 <code>Aegisub审校版-20261005.zip</code> 过期；重打包时同步更新使用说明（删未使用样式按钮、批量对帧、AI 内嵌功能、审校模式快捷键变更 Ctrl-P/Ctrl-Shift-P）。</li>
+      <li><strong>预留/悬空项：</strong><code>PlaybackChange</code> 信号无消费者（预留）；<code>review/mode</code> 图标暂借 spellcheck 图标；批量对帧异常静默吞掉、格式审查仅覆盖 ass/ssa/srt 三扩展。</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ============ tour ============ -->
+<section class="chapter" id="tour">
+  <p class="eyebrow">09 · ACCEPTANCE TOUR</p>
+  <h2>新协作者验收路线</h2>
+  <ol>
+    <li><strong>构建：</strong>PowerShell 补 Git usr\bin 到 PATH → <code>build-local\rebuild.cmd</code>（重定向日志）→ 看 <code>[N/N] Linking target aegisub.exe</code> 成功 → <code>link-ready.cmd</code> → <code>打开本地新版Aegisub.cmd</code> 启动 <code>aegisub-ready.exe</code>。</li>
+    <li><strong>素材：</strong>打开 <code>素材/</code> 的 mp4 + 同名 ass。</li>
+    <li><strong>F01 倍速：</strong>工具栏下拉选 2x 播放——声音加速且不变调；4x 下若设备不支持伸缩应静音而不是声音漂移。</li>
+    <li><strong>F02 审校：</strong>开启字幕审校模式 → Ctrl-Shift-P 预览当前行（±1s）；进编辑框视频暂停、离开恢复；"改后重播"开关生效；网格琥珀色=播放行、粉色=重叠。</li>
+    <li><strong>F03 对帧：</strong>停在字幕出现的帧 → 对帧助手拖框包住字幕 → 当前行自动匹配；网格多选 → 批量对帧 → 检查时间与撤销一次回滚。</li>
+    <li><strong>F04 特效：</strong>样式编辑器加第二层描边 + 开淡入 → 预览可见 → 保存/重开文件样式数据往返一致。</li>
+    <li><strong>F05–F07：</strong>样式管理器点"删除未使用的样式"；字幕 ▸ Batch Override Tags 试 <code>\bord4</code> 预设与删除；排序菜单按 CPS 排一次。</li>
+    <li><strong>F08 AI：</strong>字幕 ▸ 区域截图翻译（密钥自动继承）截当前帧；选中数行跑"音频翻译选中行"，确认【第N条】回填；模型未开通时按 403 中文指引处理。</li>
+    <li><strong>F09 审查：</strong>构造一个坏时间戳的 .ass 载入，出现"字幕格式审查"报告。</li>
+    <li><strong>Lua：</strong>自动化菜单确认 6 个脚本加载、中文标点转换在选中行可用。</li>
+  </ol>
+  <p class="footer-note">本手册由维护者的开发会话在 2026-10-09 依据 <code>git diff HEAD</code>（52 文件 +1954/−79）、untracked 新源文件与 Lua 脚本逐改动整理。行号会漂移，请以命令名与配置键为锚。发现与代码不符处以代码为准并请回改本文档。</p>
+</section>
+
+</main>
+</div>
+
+<script>
+(function () {
+  // 页头时间码标尺：静态装饰，JS 只生成刻度
+  var g = document.getElementById('ruler-ticks');
+  if (g) {
+    var svg = 'http://www.w3.org/2000/svg';
+    for (var i = 0; i <= 76; i++) {
+      var l = document.createElementNS(svg, 'line');
+      var x = i * 10;
+      var major = i % 10 === 0;
+      l.setAttribute('x1', x); l.setAttribute('x2', x);
+      l.setAttribute('y1', major ? 36 : 42); l.setAttribute('y2', 46);
+      l.setAttribute('class', major ? 'tick-major' : 'tick-minor');
+      l.setAttribute('stroke-width', major ? 1.5 : 1);
+      g.appendChild(l);
+    }
+  }
+
+  // 目录 scrollspy
+  var links = Array.prototype.slice.call(document.querySelectorAll('#toc a[href^="#"]'));
+  var map = {};
+  links.forEach(function (a) { map[a.getAttribute('href').slice(1)] = a; });
+  var targets = Object.keys(map).map(function (id) { return document.getElementById(id); }).filter(Boolean);
+  function setActive(id) {
+    links.forEach(function (a) { a.classList.remove('active'); });
+    if (map[id]) map[id].classList.add('active');
+  }
+  if ('IntersectionObserver' in window) {
+    var visible = {};
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { visible[e.target.id] = e.isIntersecting; });
+      for (var i = 0; i < targets.length; i++) {
+        if (visible[targets[i].id]) { setActive(targets[i].id); break; }
+      }
+    }, { rootMargin: '-20% 0px -60% 0px' });
+    targets.forEach(function (t) { io.observe(t); });
+  }
+})();
+</script>
+
+</body>
+</html>

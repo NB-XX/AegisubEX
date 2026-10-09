@@ -48,7 +48,9 @@
         { "command" : "grid/sort/style" },
         { "command" : "grid/sort/actor" },
         { "command" : "grid/sort/effect" },
-        { "command" : "grid/sort/layer" }
+        { "command" : "grid/sort/layer" },
+        { "command" : "grid/sort/cps" },
+        { "command" : "grid/sort/text_length" }
     ],
     "main/subtitle/sort selected lines" : [
         { "command" : "grid/sort/start/selected" },
@@ -56,7 +58,13 @@
         { "command" : "grid/sort/style/selected" },
         { "command" : "grid/sort/actor/selected" },
         { "command" : "grid/sort/effect/selected" },
-        { "command" : "grid/sort/layer/selected" }
+        { "command" : "grid/sort/layer/selected" },
+        { "command" : "grid/sort/cps/selected" },
+        { "command" : "grid/sort/text_length/selected" }
+    ],
+    "main/subtitle/batch tags" : [
+        { "command" : "edit/batch/apply_tags" },
+        { "command" : "edit/batch/remove_tags" }
     ],
     "main/timing" : [
         { "command" : "time/shift" },

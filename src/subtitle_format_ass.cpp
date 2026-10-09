@@ -21,6 +21,7 @@
 #include "ass_info.h"
 #include "ass_file.h"
 #include "ass_style.h"
+#include "ass_style_fx.h"
 #include "ass_parser.h"
 #include "options.h"
 #include "text_file_reader.h"
@@ -40,6 +41,21 @@ void AssSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename,
 	AssParser parser(target, version);
 	while (file.HasMoreLines())
 		parser.AddLine(file.ReadLineFromFile());
+
+	// Restore the Aegisub-only layer-style settings stored as ignorable
+	// Script Info entries. The standard ASS style records remain unchanged.
+	for (auto const& info : target->Info) {
+		if (info.Key() != "Aegisub Style FX") continue;
+		auto comma = info.Value().find(',');
+		if (comma == std::string_view::npos) continue;
+		try {
+			auto name = agi::ass::inline_string_decode(info.Value().substr(0, comma));
+			if (auto style = target->GetStyle(name))
+				style->SetFxData(info.Value().substr(comma + 1));
+		}
+		catch (...) { }
+	}
+	CollapseStyleEffects(*target);
 }
 
 #ifdef _WIN32
@@ -153,18 +169,36 @@ struct Writer {
 
 void AssSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const&, const char *encoding) const {
 	Writer writer(filename, encoding);
-	writer.Write(src->Info);
-	writer.Write(src->Properties);
-	writer.Write(src->Styles);
-	writer.Write(src->Attachments);
-	writer.Write(src->Events);
-	writer.WriteExtradata(src->Extradata);
+	AssFile expanded(*src);
+	ExpandStyleEffects(expanded, true);
+	std::vector<AssInfo> info;
+	for (auto const& entry : expanded.Info)
+		if (entry.Key() != "Aegisub Style FX") info.push_back(entry);
+	for (auto const& style : expanded.Styles) {
+		if (style.HasStyleFx())
+			info.emplace_back("Aegisub Style FX", agi::ass::inline_string_encode(style.name) + "," + style.GetFxData());
+	}
+	writer.Write(info);
+	writer.Write(expanded.Properties);
+	writer.Write(expanded.Styles);
+	writer.Write(expanded.Attachments);
+	writer.Write(expanded.Events);
+	writer.WriteExtradata(expanded.Extradata);
 }
 
 void AssSubtitleFormat::ExportFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const&, const char *encoding) const {
 	Writer writer(filename, encoding);
-	writer.Write(src->Info);
-	writer.Write(src->Styles);
-	writer.Write(src->Attachments);
-	writer.Write(src->Events);
+	AssFile expanded(*src);
+	ExpandStyleEffects(expanded, true);
+	std::vector<AssInfo> info;
+	for (auto const& entry : expanded.Info)
+		if (entry.Key() != "Aegisub Style FX") info.push_back(entry);
+	for (auto const& style : expanded.Styles) {
+		if (style.HasStyleFx())
+			info.emplace_back("Aegisub Style FX", agi::ass::inline_string_encode(style.name) + "," + style.GetFxData());
+	}
+	writer.Write(info);
+	writer.Write(expanded.Styles);
+	writer.Write(expanded.Attachments);
+	writer.Write(expanded.Events);
 }

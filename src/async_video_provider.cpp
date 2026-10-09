@@ -18,6 +18,7 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "ass_style_fx.h"
 #include "export_fixstyle.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "video_frame.h"
@@ -63,13 +64,17 @@ std::shared_ptr<VideoFrame> AsyncVideoProvider::ProcFrame(int frame_number, doub
 			// other lines will probably not be viewed before the file changes
 			// again), and if it's a different frame, export the entire file.
 			if (single_frame != NEW_SUBS_FILE) {
-				subs_provider->LoadSubtitles(subs.get());
+				AssFile rendered(*subs);
+				ExpandStyleEffects(rendered, false);
+				subs_provider->LoadSubtitles(&rendered);
 				single_frame = SUBS_FILE_ALREADY_LOADED;
 			}
 			else {
 				AssFixStylesFilter::ProcessSubs(subs.get());
 				single_frame = frame_number;
-				subs_provider->LoadSubtitles(subs.get(), time);
+				AssFile rendered(*subs);
+				ExpandStyleEffects(rendered, false);
+				subs_provider->LoadSubtitles(&rendered, time);
 			}
 		}
 	}
@@ -103,7 +108,9 @@ VideoFrame AsyncVideoProvider::GetSubtitles(double time) {
 	if (!subs) return frame_black;
 	VideoFrame frame_white = GetBlankFrame(true);
 
-	subs_provider->LoadSubtitles(subs.get());
+	AssFile rendered(*subs);
+	ExpandStyleEffects(rendered, false);
+	subs_provider->LoadSubtitles(&rendered);
 	subs_provider->DrawSubtitles(frame_black, time / 1000.);
 	subs_provider->DrawSubtitles(frame_white, time / 1000.);
 

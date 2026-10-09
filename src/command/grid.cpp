@@ -127,6 +127,54 @@ struct grid_sort_actor_selected final : public validate_sel_multiple {
 	}
 };
 
+struct grid_sort_cps final : public Command {
+	CMD_NAME("grid/sort/cps")
+	STR_MENU("CPS")
+	STR_DISP("CPS")
+	STR_HELP("Sort all subtitles by their characters per second")
+
+	void operator()(agi::Context *c) override {
+		c->ass->Sort(AssFile::CompCPS);
+		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+	}
+};
+
+struct grid_sort_cps_selected final : public validate_sel_multiple {
+	CMD_NAME("grid/sort/cps/selected")
+	STR_MENU("CPS")
+	STR_DISP("CPS")
+	STR_HELP("Sort selected subtitles by their characters per second")
+
+	void operator()(agi::Context *c) override {
+		c->ass->Sort(AssFile::CompCPS, c->selectionController->GetSelectedSet());
+		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+	}
+};
+
+struct grid_sort_text_length final : public Command {
+	CMD_NAME("grid/sort/text_length")
+	STR_MENU("Text Length")
+	STR_DISP("Text Length")
+	STR_HELP("Sort all subtitles by their text length")
+
+	void operator()(agi::Context *c) override {
+		c->ass->Sort(AssFile::CompTextLength);
+		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+	}
+};
+
+struct grid_sort_text_length_selected final : public validate_sel_multiple {
+	CMD_NAME("grid/sort/text_length/selected")
+	STR_MENU("Text Length")
+	STR_DISP("Text Length")
+	STR_HELP("Sort selected subtitles by their text length")
+
+	void operator()(agi::Context *c) override {
+		c->ass->Sort(AssFile::CompTextLength, c->selectionController->GetSelectedSet());
+		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+	}
+};
+
 struct grid_sort_effect final : public Command {
 	CMD_NAME("grid/sort/effect")
 	STR_MENU("&Effect")
@@ -411,6 +459,10 @@ namespace cmd {
 		reg(std::make_unique<grid_sort_start>());
 		reg(std::make_unique<grid_sort_style>());
 		reg(std::make_unique<grid_sort_actor_selected>());
+		reg(std::make_unique<grid_sort_cps>());
+		reg(std::make_unique<grid_sort_cps_selected>());
+		reg(std::make_unique<grid_sort_text_length>());
+		reg(std::make_unique<grid_sort_text_length_selected>());
 		reg(std::make_unique<grid_sort_effect_selected>());
 		reg(std::make_unique<grid_sort_end_selected>());
 		reg(std::make_unique<grid_sort_layer_selected>());

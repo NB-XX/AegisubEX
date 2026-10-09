@@ -26,12 +26,30 @@
 #include "project.h"
 #include "include/aegisub/context.h"
 
+#include <libaegisub/character_count.h>
+
 #include <algorithm>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 #include <cassert>
+#include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
+
+namespace {
+int character_count_ignore_mask() {
+	int ignore = agi::IGNORE_BLOCKS;
+	if (OPT_GET("Subtitle/Character Counter/Ignore Whitespace")->GetBool())
+		ignore |= agi::IGNORE_WHITESPACE;
+	if (OPT_GET("Subtitle/Character Counter/Ignore Punctuation")->GetBool())
+		ignore |= agi::IGNORE_PUNCTUATION;
+	return ignore;
+}
+
+size_t dialogue_character_count(AssDialogue const& line) {
+	return agi::CharacterCount(line.Text.get(), character_count_ignore_mask());
+}
+}
 
 AssFile::AssFile() { }
 
@@ -221,6 +239,24 @@ bool AssFile::CompEffect(AssDialogue const& lft, AssDialogue const& rgt) {
 }
 bool AssFile::CompLayer(AssDialogue const& lft, AssDialogue const& rgt) {
 	return lft.Layer < rgt.Layer;
+}
+bool AssFile::CompCPS(AssDialogue const& lft, AssDialogue const& rgt) {
+	const int left_duration = lft.End - lft.Start;
+	const int right_duration = rgt.End - rgt.Start;
+	const bool left_valid = left_duration > 0;
+	const bool right_valid = right_duration > 0;
+	if (left_valid != right_valid)
+		return left_valid; // Keep lines with invalid durations at the end.
+	if (!left_valid)
+		return false;
+
+	const auto left_characters = dialogue_character_count(lft);
+	const auto right_characters = dialogue_character_count(rgt);
+	return static_cast<std::uint64_t>(left_characters) * right_duration <
+		static_cast<std::uint64_t>(right_characters) * left_duration;
+}
+bool AssFile::CompTextLength(AssDialogue const& lft, AssDialogue const& rgt) {
+	return dialogue_character_count(lft) < dialogue_character_count(rgt);
 }
 
 void AssFile::Sort(CompFunc comp, std::set<AssDialogue*> const& limit) {

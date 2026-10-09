@@ -32,8 +32,15 @@
 #include <libaegisub/color.h>
 
 #include <array>
+#include <vector>
 
 class wxArrayString;
+
+struct AssStyleStroke {
+	double width = 2.0;
+	double blur = 0.0;
+	agi::Color color{0, 0, 0};
+};
 
 class AssStyle final : public AssEntry, public AssEntryListHook {
 	std::string data;
@@ -60,12 +67,26 @@ public:
 	int borderstyle = 1;       ///< 1: Normal; 3: Opaque border boxes; 4: Single opaque shadow box (libass only)
 	double outline_w = 2.;     ///< Outline width in pixels
 	double shadow_w = 2.;      ///< Shadow distance in pixels
+	// Aegisub-only layer style attributes. They are kept separately from the
+	// standard ASS fields and are expanded into ordinary dialogue layers when
+	// rendering/exporting.
+	std::vector<AssStyleStroke> strokes;
+	bool glow_enabled = false;
+	double glow_width = 8.0;
+	double glow_blur = 4.0;
+	agi::Color glow_color{0, 0, 0};
+	int fade_in_ms = 0;
+	int fade_out_ms = 0;
 	int alignment = 2;         ///< \an-style line alignment
 	std::array<int, 3> Margin; ///< Left / Right / Vertical
 	int encoding = 1;          ///< ASS font encoding needed for some non-unicode fonts
 
 	/// Update the raw line data after one or more of the public members have been changed
 	void UpdateData();
+	/// Serialize Aegisub-only style effects for the Script Info extension.
+	std::string GetFxData() const;
+	void SetFxData(std::string_view data);
+	bool HasStyleFx() const { return !strokes.empty() || glow_enabled || fade_in_ms > 0 || fade_out_ms > 0; }
 
 	/// @brief Get a list of valid ASS font encodings
 	static void GetEncodings(wxArrayString &encodingStrings);

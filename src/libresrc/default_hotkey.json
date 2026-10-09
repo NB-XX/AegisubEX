@@ -210,8 +210,11 @@
 		"video/jump/start" : [
 			"Ctrl-1"
 		],
-		"video/play" : [
+		"review/play_pause" : [
 			"Ctrl-P"
+		],
+		"review/preview" : [
+			"Ctrl-Shift-P"
 		],
 		"video/zoom/in" : [
 			"Ctrl-KP_Add"

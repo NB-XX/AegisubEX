@@ -55,6 +55,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <set>
 #include <vector>
 #include <wx/bmpbuttn.h>
 #include <wx/button.h>
@@ -113,6 +114,7 @@ class DialogStyleManager final : public wxDialog {
 	wxButton *CurrentEdit;
 	wxButton *CurrentCopy;
 	wxButton *CurrentDelete;
+	wxButton *CurrentPurge;
 	wxButton *CurrentMoveUp;
 	wxButton *CurrentMoveDown;
 	wxButton *CurrentMoveTop;
@@ -152,6 +154,7 @@ class DialogStyleManager final : public wxDialog {
 
 	void OnCurrentCopy();
 	void OnCurrentDelete();
+	void OnCurrentPurge();
 	void OnCurrentEdit();
 	void OnCurrentImport();
 	void OnCurrentNew();
@@ -301,6 +304,8 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 	// Local styles list
 	wxButton *CurrentImport = new wxButton(CurrentSizerBox, -1, _("&Import from script..."));
 	wxSizer *CurrentButtons = make_edit_buttons(CurrentSizerBox, _("<- Copy to &storage"), &MoveToStorage, &CurrentNew, &CurrentEdit, &CurrentCopy, &CurrentDelete);
+	CurrentPurge = new wxButton(CurrentSizerBox, -1, to_wx("删除未使用的样式"));
+	CurrentPurge->SetToolTip(to_wx("删除所有没有被任何字幕行（含注释行）引用、也没有被 {\\r样式名} 标签引用的样式"));
 
 	wxSizer *MoveImportSizer = new wxBoxSizer(wxHORIZONTAL);
 	MoveImportSizer->Add(MoveToStorage,1,wxEXPAND | wxRIGHT,5);
@@ -313,6 +318,7 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 
 	CurrentSizer->Add(CurrentListSizer,1,wxEXPAND | wxBOTTOM,5);
 	CurrentSizer->Add(MoveImportSizer,0,wxEXPAND | wxBOTTOM,5);
+	CurrentSizer->Add(CurrentPurge,0,wxEXPAND | wxBOTTOM,5);
 	CurrentSizer->Add(CurrentButtons,0,wxEXPAND,0);
 
 	// Buttons
@@ -367,6 +373,7 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 	CurrentEdit->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { OnCurrentEdit(); });
 	CurrentCopy->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { OnCurrentCopy(); });
 	CurrentDelete->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { OnCurrentDelete(); });
+	CurrentPurge->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { OnCurrentPurge(); });
 
 	CurrentImport->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { OnCurrentImport(); });
 
@@ -668,6 +675,57 @@ void DialogStyleManager::OnCurrentDelete() {
 		}
 		c->ass->Commit(_("style delete"), AssFile::COMMIT_STYLES);
 	}
+}
+
+void DialogStyleManager::OnCurrentPurge() {
+	// Collect the style names this file still references. Commented-out
+	// lines count too, because uncommenting one later should find its style
+	// intact. Styles reached only through inline override tags ({\r名称})
+	// are referenced as well.
+	std::set<std::string> used;
+	for (auto& event : c->ass->Events) {
+		used.insert(event.Style.get());
+		std::string const& text = event.Text.get();
+		for (size_t pos = text.find("\\r"); pos != std::string::npos; pos = text.find("\\r", pos + 2)) {
+			size_t end = text.find_first_of("}\\", pos + 2);
+			if (end != pos + 2)
+				used.insert(text.substr(pos + 2, end == std::string::npos ? std::string::npos : end - pos - 2));
+		}
+	}
+
+	std::vector<AssStyle*> doomed;
+	std::vector<std::string> doomed_names;
+	for (auto& style : c->ass->Styles) {
+		// "Default" is the fallback every file needs and lines can name
+		// without referencing it in text, so keep it unconditionally.
+		if (style.name == "Default" || used.count(style.name)) continue;
+		doomed.push_back(&style);
+		doomed_names.push_back(style.name);
+	}
+
+	if (doomed.empty()) {
+		wxMessageBox(to_wx("这个字幕文件里没有未使用的样式。"), to_wx("删除未使用样式"), wxOK | wxICON_INFORMATION, this);
+		return;
+	}
+
+	// Never empty the style list: the file must retain at least one style.
+	if (doomed.size() >= c->ass->Styles.size()) {
+		wxMessageBox(to_wx("这些样式虽然都未被引用，但至少要为一个字幕文件保留一个样式，未执行删除。"), to_wx("删除未使用样式"), wxOK | wxICON_INFORMATION, this);
+		return;
+	}
+
+	wxString names;
+	for (size_t i = 0; i < doomed_names.size(); ++i) {
+		names += (i ? "、" : "") + to_wx(doomed_names[i]);
+		if (i >= 19) { names += "…"; break; }
+	}
+	if (wxMessageBox(fmt_wx("确定要删除 %d 个未被引用的样式吗？\n\n%s\n\n删除后仍可通过撤销恢复。", static_cast<int>(doomed.size()), names),
+		to_wx("删除未使用样式"), wxYES_NO | wxICON_EXCLAMATION, this) != wxYES)
+		return;
+
+	for (AssStyle *style : doomed)
+		delete style;
+	c->ass->Commit(to_wx("删除未使用的样式"), AssFile::COMMIT_STYLES);
 }
 
 void DialogStyleManager::OnCurrentImport() {

@@ -52,15 +52,15 @@ class SubtitlesPreview final : public wxWindow {
 	/// Bitmap to render into
 	std::unique_ptr<wxBitmap> bmp;
 	/// The currently display style
-	AssStyle* style;
+	std::unique_ptr<AssStyle> style;
+	/// Cached font name, kept separately from the replaceable style object.
+	std::string preview_font;
 	/// Video provider to render into
 	std::unique_ptr<VideoProvider> vid;
 	/// Current background color
 	agi::Color back_color;
-	/// Subtitle file containing the style and displayed line
-	std::unique_ptr<AssFile> sub_file;
 	/// Line used to render the specified text
-	AssDialogue* line;
+	std::unique_ptr<AssDialogue> line;
 
 	std::unique_ptr<DialogProgress> progress;
 

@@ -69,6 +69,7 @@
 #include <wx/clipbrd.h>
 #include <wx/fontdlg.h>
 #include <wx/textentry.h>
+#include <wx/textdlg.h>
 
 namespace {
 	using namespace boost::adaptors;
@@ -1266,6 +1267,94 @@ struct edit_insert_original final : public Command {
 	}
 };
 
+struct edit_batch_apply_tags final : public Command {
+	CMD_NAME("edit/batch/apply_tags")
+	STR_DISP("Batch Apply Override Tags")
+	STR_MENU("Batch Apply Override Tags...")
+	STR_HELP("Add or replace override tags on all selected lines")
+	CMD_TYPE(COMMAND_VALIDATE)
+
+	bool Validate(const agi::Context *c) override {
+		return !c->selectionController->GetSelectedSet().empty();
+	}
+
+	void operator()(agi::Context *c) override {
+		wxTextEntryDialog dialog(c->parent, _("Enter ASS override tags, for example \\bord4\\shad2."),
+			_("Batch Apply Override Tags"));
+		if (dialog.ShowModal() != wxID_OK) return;
+		std::string raw = from_wx(dialog.GetValue());
+		boost::trim(raw);
+		if (raw.starts_with('{')) raw.erase(raw.begin());
+		if (!raw.empty() && raw.back() == '}') raw.pop_back();
+		AssDialogueBlockOverride parsed(raw);
+		parsed.ParseTags();
+		std::vector<std::string> tags;
+		for (auto const& tag : parsed.Tags)
+			if (tag.IsValid()) tags.emplace_back(tag);
+		if (tags.empty()) return;
+
+		for (auto line : c->selectionController->GetSelectedSet()) {
+			auto blocks = line->ParseTags();
+			AssDialogueBlockOverride *first = nullptr;
+			for (auto const& block : blocks) {
+				if (block->GetType() != AssBlockType::OVERRIDE) continue;
+				auto override_block = static_cast<AssDialogueBlockOverride*>(block.get());
+				if (!first) first = override_block;
+				override_block->Tags.erase(std::remove_if(begin(override_block->Tags), end(override_block->Tags), [&](AssOverrideTag const& old_tag) {
+					return std::any_of(tags.begin(), tags.end(), [&](std::string const& text) {
+						return AssOverrideTag(text).Name == old_tag.Name;
+					});
+				}), end(override_block->Tags));
+			}
+			if (!first) {
+				blocks.insert(begin(blocks), std::make_unique<AssDialogueBlockOverride>());
+				first = static_cast<AssDialogueBlockOverride*>(blocks.front().get());
+			}
+			for (auto const& tag : tags) first->AddTag(tag);
+			line->UpdateText(blocks);
+		}
+		c->ass->Commit(_("batch apply override tags"), AssFile::COMMIT_DIAG_TEXT);
+	}
+};
+
+struct edit_batch_remove_tags final : public Command {
+	CMD_NAME("edit/batch/remove_tags")
+	STR_DISP("Batch Remove Override Tags")
+	STR_MENU("Batch Remove Override Tags...")
+	STR_HELP("Remove named override tags from all selected lines")
+	CMD_TYPE(COMMAND_VALIDATE)
+
+	bool Validate(const agi::Context *c) override {
+		return !c->selectionController->GetSelectedSet().empty();
+	}
+
+	void operator()(agi::Context *c) override {
+		wxTextEntryDialog dialog(c->parent, _("Enter tag names to remove, separated by spaces, for example \\bord \\shad."),
+			_("Batch Remove Override Tags"));
+		if (dialog.ShowModal() != wxID_OK) return;
+		std::string raw = from_wx(dialog.GetValue());
+		std::vector<std::string> names;
+		boost::split(names, raw, boost::is_any_of(" ,\t\r\n"), boost::token_compress_on);
+		names.erase(std::remove_if(begin(names), end(names), [](std::string const& name) { return name.empty(); }), end(names));
+		if (names.empty()) return;
+		for (auto& name : names)
+			if (!name.starts_with('\\')) name.insert(name.begin(), '\\');
+
+		for (auto line : c->selectionController->GetSelectedSet()) {
+			auto blocks = line->ParseTags();
+			for (auto const& block : blocks) {
+				if (block->GetType() != AssBlockType::OVERRIDE) continue;
+				auto override_block = static_cast<AssDialogueBlockOverride*>(block.get());
+				override_block->Tags.erase(std::remove_if(begin(override_block->Tags), end(override_block->Tags), [&](AssOverrideTag const& tag) {
+					return std::find(names.begin(), names.end(), tag.Name) != names.end();
+				}), end(override_block->Tags));
+			}
+			line->UpdateText(blocks);
+		}
+		c->ass->Commit(_("batch remove override tags"), AssFile::COMMIT_DIAG_TEXT);
+	}
+};
+
 }
 
 namespace cmd {
@@ -1302,5 +1391,7 @@ namespace cmd {
 		reg(std::make_unique<edit_insert_original>());
 		reg(std::make_unique<edit_clear>());
 		reg(std::make_unique<edit_clear_text>());
+		reg(std::make_unique<edit_batch_apply_tags>());
+		reg(std::make_unique<edit_batch_remove_tags>());
 	}
 }

@@ -34,6 +34,7 @@
 #include "options.h"
 
 #include <libaegisub/fs.h>
+#include <libaegisub/ass/string_codec.h>
 #include <libaegisub/io.h>
 #include <libaegisub/line_iterator.h>
 #include <libaegisub/path.h>
@@ -53,8 +54,11 @@ void AssStyleStorage::Save() const {
 	agi::io::Save out(file);
 	out.Get() << "\xEF\xBB\xBF"; // UTF-8 BOM
 
-	for (auto const& cur : style)
+	for (auto const& cur : style) {
 		out.Get() << cur->GetEntryData() << "\n";
+		if (cur->HasStyleFx())
+			out.Get() << ";AegisubStyleFX:" << agi::ass::inline_string_encode(cur->GetFxData()) << "\n";
+	}
 }
 
 void AssStyleStorage::Load(agi::fs::path const& filename) {
@@ -64,6 +68,11 @@ void AssStyleStorage::Load(agi::fs::path const& filename) {
 	try {
 		auto in = agi::io::Open(file);
 		for (auto const& line : agi::line_iterator<std::string>(*in)) {
+			if (line.starts_with(";AegisubStyleFX:") && !style.empty()) {
+				try { style.back()->SetFxData(agi::ass::inline_string_decode(line.substr(16))); }
+				catch (...) { }
+				continue;
+			}
 			try {
 				style.emplace_back(std::make_unique<AssStyle>(line));
 			} catch(...) {

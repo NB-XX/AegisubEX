@@ -32,6 +32,7 @@
 #include "command.h"
 
 #include "../ass_dialogue.h"
+#include "../ass_file.h"
 #include "../async_video_provider.h"
 #include "../compat.h"
 #include "../dialog_detached_video.h"
@@ -639,6 +640,46 @@ struct video_play final : public validator_video_loaded {
 	}
 };
 
+struct review_mode final : public validator_video_loaded {
+	CMD_NAME("review/mode")
+	CMD_ICON(spellcheck_toolbutton)
+	STR_MENU("字幕审校模式")
+	STR_DISP("字幕审校")
+	STR_HELP("进入或退出字幕审校模式")
+	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
+
+	bool IsActive(const agi::Context *c) override {
+		return c->videoController->IsReviewMode();
+	}
+
+	void operator()(agi::Context *c) override {
+		c->videoController->SetReviewMode(!c->videoController->IsReviewMode());
+	}
+};
+
+struct review_play_pause final : public validator_video_loaded {
+	CMD_NAME("review/play_pause")
+	STR_MENU("审校模式播放/暂停")
+	STR_DISP("审校模式播放/暂停")
+	STR_HELP("继续或暂停播放，不改变当前选中的字幕行")
+
+	void operator()(agi::Context *c) override {
+		c->videoController->Play();
+	}
+};
+
+struct review_preview final : public validator_video_loaded {
+	CMD_NAME("review/preview")
+	STR_MENU("预览当前字幕")
+	STR_DISP("预览当前字幕")
+	STR_HELP("播放当前选中字幕及其前后各1秒的画面")
+
+	void operator()(agi::Context *c) override {
+		if (auto line = c->selectionController->GetActiveLine())
+			c->videoController->PlayReviewPreview(line->Start, line->End, c->ass.get());
+	}
+};
+
 struct video_play_line final : public validator_video_loaded {
 	CMD_NAME("video/play/line")
 	CMD_ICON(button_playline)
@@ -805,6 +846,9 @@ namespace cmd {
 		reg(std::make_unique<video_open_dummy>());
 		reg(std::make_unique<video_opt_autoscroll>());
 		reg(std::make_unique<video_play>());
+		reg(std::make_unique<review_mode>());
+		reg(std::make_unique<review_play_pause>());
+		reg(std::make_unique<review_preview>());
 		reg(std::make_unique<video_play_line>());
 		reg(std::make_unique<video_show_overscan>());
 		reg(std::make_unique<video_reset_pan>());

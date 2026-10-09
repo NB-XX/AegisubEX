@@ -61,11 +61,15 @@ class BaseGrid final : public wxWindow {
 	int yPos = 0;
 
 	int active_row = -1;
+	int playback_row = -1;
+	bool review_mode = false;
+	bool overlap_highlight = false;
 
 	std::unique_ptr<WidthHelper> width_helper;
 
 	/// Rows which are visible on the current video frame
 	std::vector<int> visible_rows;
+	std::vector<bool> overlap_rows;
 
 	agi::Context *context; ///< Associated project context
 
@@ -82,6 +86,9 @@ class BaseGrid final : public wxWindow {
 		wxBrush Comment;
 		wxBrush Visible;
 		wxBrush SelectedComment;
+		wxBrush Playback;
+		wxBrush Overlap;
+		wxBrush OverlapSelected;
 		wxBrush LeftCol;
 	} row_colors;
 
@@ -107,6 +114,7 @@ class BaseGrid final : public wxWindow {
 	void OnSubtitlesCommit(int type);
 	void OnActiveLineChanged(AssDialogue *);
 	void OnSeek();
+	void OnReviewModeChanged(bool active);
 
 	void AdjustScrollbar();
 	void SetColumnWidths();
@@ -114,6 +122,7 @@ class BaseGrid final : public wxWindow {
 	bool IsDisplayed(const AssDialogue *line) const;
 
 	void UpdateMaps();
+	void UpdateOverlapRows();
 	void UpdateStyle();
 
 	void SelectRow(int row, bool addToSelected = false, bool select=true);
@@ -132,6 +141,8 @@ public:
 
 	void SetByFrame(bool state);
 	void ScrollTo(int y);
+	void SetOverlapHighlight(bool enabled);
+	bool IsOverlapHighlightEnabled() const { return overlap_highlight; }
 
 	DECLARE_EVENT_TABLE()
 };

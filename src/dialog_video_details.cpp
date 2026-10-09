@@ -31,6 +31,7 @@
 #include "compat.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "options.h"
 #include "project.h"
 
 #include <libaegisub/ass/time.h>
@@ -38,6 +39,7 @@
 #include <boost/rational.hpp>
 #include <wx/dialog.h>
 #include <wx/sizer.h>
+#include <wx/spinctrl.h>
 #include <wx/statbox.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
@@ -73,11 +75,25 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 
 	video_sizer->Add(fg);
 
+	auto frame_match_sizer = new wxStaticBoxSizer(wxHORIZONTAL, &d, _("Frame Match Assistant"));
+	auto frame_match_box = frame_match_sizer->GetStaticBox();
+	frame_match_sizer->Add(new wxStaticText(frame_match_box, -1, _("Minimum region similarity (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	auto minimum_similarity = new wxSpinCtrl(frame_match_box, -1, wxEmptyString, wxDefaultPosition, wxSize(90, -1), wxSP_ARROW_KEYS, 25, 95, OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt());
+	frame_match_sizer->Add(minimum_similarity, 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 12);
+	frame_match_sizer->Add(new wxStaticText(frame_match_box, -1, _("Rerun similarity step (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	auto rerun_step = new wxSpinCtrl(frame_match_box, -1, wxEmptyString, wxDefaultPosition, wxSize(90, -1), wxSP_ARROW_KEYS, 5, 30, OPT_GET("Tool/Frame Match/Rerun Step")->GetInt());
+	frame_match_sizer->Add(rerun_step, 0, wxALIGN_CENTRE_VERTICAL);
+
 	auto main_sizer = new wxBoxSizer(wxVERTICAL);
 	main_sizer->Add(video_sizer, 1, wxALL|wxEXPAND, 5);
+	main_sizer->Add(frame_match_sizer, 0, wxLEFT|wxRIGHT|wxBOTTOM|wxEXPAND, 5);
 	main_sizer->Add(d.CreateSeparatedButtonSizer(wxOK), 0, wxALL|wxEXPAND, 5);
 	d.SetSizerAndFit(main_sizer);
 
 	d.CenterOnParent();
-	d.ShowModal();
+	if (d.ShowModal() == wxID_OK)
+	{
+		OPT_SET("Tool/Frame Match/Minimum Similarity")->SetInt(minimum_similarity->GetValue());
+		OPT_SET("Tool/Frame Match/Rerun Step")->SetInt(rerun_step->GetValue());
+	}
 }

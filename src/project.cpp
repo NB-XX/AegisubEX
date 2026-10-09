@@ -33,6 +33,7 @@
 #include "options.h"
 #include "selection_controller.h"
 #include "subs_controller.h"
+#include "subtitle_format_audit.h"
 #include "utils.h"
 #include "video_controller.h"
 #include "video_display.h"
@@ -131,11 +132,13 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 		return false;
 	}
 	catch (agi::Exception const& e) {
-		ShowError(e.GetMessage());
+		if (!ShowSubtitleFormatAudit(context->parent, path, encoding.c_str(), e.GetMessage()))
+			ShowError(e.GetMessage());
 		return false;
 	}
 	catch (std::exception const& e) {
-		ShowError(std::string(e.what()));
+		if (!ShowSubtitleFormatAudit(context->parent, path, encoding.c_str(), e.what()))
+			ShowError(std::string(e.what()));
 		return false;
 	}
 	catch (...) {

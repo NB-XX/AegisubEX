@@ -35,6 +35,7 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_style.h"
+#include "ass_style_fx.h"
 #include "dialog_progress.h"
 #include "subs_preview.h"
 #include "include/aegisub/subtitles_provider.h"
@@ -45,20 +46,20 @@
 #include <wx/dcclient.h>
 #include <wx/msgdlg.h>
 
+#include <algorithm>
+
 SubtitlesPreview::SubtitlesPreview(wxWindow *parent, wxSize size, int winStyle, agi::Color col)
 : wxWindow(parent, -1, wxDefaultPosition, size, winStyle)
-, style(new AssStyle)
+, style(std::make_unique<AssStyle>())
 , back_color(col)
-, sub_file(std::make_unique<AssFile>())
-, line(new AssDialogue)
+, line(std::make_unique<AssDialogue>())
 {
 	line->Text = "{\\q2}preview";
+	// The default-constructed dialogue has no style name. Keep it explicitly
+	// bound to the preview style so libass never has to resolve an empty style.
+	line->Style = "Default";
 
 	SetStyle(*style);
-
-	sub_file->LoadDefault();
-	sub_file->Styles.push_back(*style);
-	sub_file->Events.push_back(*line);
 
 	SetSizeHints(size.GetWidth(), size.GetHeight(), -1, -1);
 	wxSizeEvent evt(size);
@@ -73,11 +74,17 @@ SubtitlesPreview::~SubtitlesPreview() {
 }
 
 void SubtitlesPreview::SetStyle(AssStyle const& new_style) {
-	if (provider && style->font != new_style.font)
+	if (provider && preview_font != new_style.font)
 		provider->Reinitialize();
 
-	*style = new_style;
-	style->name = "Default";
+	// Replace the preview copy instead of assigning into it. wx preview refreshes
+	// can outlive temporary style edits, and replacing avoids retaining stale
+	// AssEntry string storage across repeated control updates.
+	auto updated_style = std::make_unique<AssStyle>(new_style);
+	updated_style->name = "Default";
+	preview_font = updated_style->font;
+	style = std::move(updated_style);
+	line->Style = "Default";
 	style->alignment = 5;
 	std::fill(style->Margin.begin(), style->Margin.end(), 0);
 	style->UpdateData();
@@ -103,12 +110,31 @@ void SubtitlesPreview::SetColour(agi::Color col) {
 void SubtitlesPreview::UpdateBitmap() {
 	if (!vid) return;
 
+	// Build a fresh snapshot for each render instead of tearing down and
+	// repopulating intrusive list nodes that were previously handed to the
+	// subtitle provider for serialization.
+	auto preview_file = std::make_unique<AssFile>();
+	preview_file->LoadDefault();
+	// Keep a conventional subtitle coordinate scale and match the preview
+	// aspect ratio. Using the bitmap's pixel height as PlayResY made large
+	// subtitle fonts render at full pixel size and clip the effect preview.
+	constexpr int preview_res_y = 288;
+	int preview_res_x = std::max(1, bmp->GetWidth()) * preview_res_y / std::max(1, bmp->GetHeight());
+	preview_file->SetScriptInfo("PlayResX", std::to_string(preview_res_x));
+	preview_file->SetScriptInfo("PlayResY", std::to_string(preview_res_y));
+	auto preview_style = new AssStyle(*style);
+	preview_style->name = "Default";
+	preview_style->UpdateData();
+	preview_file->Styles.push_back(*preview_style);
+	preview_file->Events.push_back(*new AssDialogue(*line));
+	ExpandStyleEffects(*preview_file, false);
+
 	VideoFrame frame;
 	vid->GetFrame(0, frame);
 
 	if (provider) {
 		try {
-			provider->LoadSubtitles(sub_file.get());
+			provider->LoadSubtitles(preview_file.get());
 			provider->DrawSubtitles(frame, 0.1);
 		}
 		catch (...) { }
@@ -142,9 +168,6 @@ void SubtitlesPreview::OnSize(wxSizeEvent &evt) {
 			_("Could not get any subtitles provider for the preview box. Make sure that you have a provider installed."),
 			_("No subtitles provider"), wxOK | wxICON_ERROR | wxCENTER);
 	}
-
-	sub_file->SetScriptInfo("PlayResX", std::to_string(w));
-	sub_file->SetScriptInfo("PlayResY", std::to_string(h));
 
 	UpdateBitmap();
 }

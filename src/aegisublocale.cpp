@@ -55,7 +55,12 @@ wxTranslations *AegisubLocale::GetTranslations() {
 	if (!translations) {
 		wxTranslations::Set(translations = new wxTranslations);
 		wxFileTranslationsLoader::AddCatalogLookupPathPrefix(config::path->Decode("?data/locale/").wstring());
-#if !defined(_WIN32) && !defined(__APPLE__) && !defined(APPIMAGE_BUILD)
+		// Meson's in-tree gettext output lives under po/; keep the development
+		// build usable without installing the application or its language packs.
+		wxFileTranslationsLoader::AddCatalogLookupPathPrefix(config::path->Decode("?data/po/").wstring());
+#if defined(_WIN32)
+		wxFileTranslationsLoader::AddCatalogLookupPathPrefix(P_LOCALE);
+#elif !defined(__APPLE__) && !defined(APPIMAGE_BUILD)
 		wxFileTranslationsLoader::AddCatalogLookupPathPrefix(P_LOCALE);
 #endif
 	}

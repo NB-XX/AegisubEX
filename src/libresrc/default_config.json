@@ -446,6 +446,30 @@
 	},
 
 	"Tool" : {
+		"Playback" : {
+			"Play Speed" : 100,
+			"Review Replay After Edit" : false
+		},
+		"Frame Match" : {
+			"Minimum Similarity" : 70,
+			"Rerun Step" : 15,
+			"Region X0" : -1.0,
+			"Region Y0" : -1.0,
+			"Region X1" : -1.0,
+			"Region Y1" : -1.0
+		},
+		"AI" : {
+			"API Key" : "",
+			"Vision Model" : "qwen3.8-flash",
+			"Audio Model" : "qwen3.8-omni-flash",
+			"Target Lang" : "简体中文",
+			"Region X0" : 0.0,
+			"Region Y0" : 70.0,
+			"Region X1" : 100.0,
+			"Region Y1" : 100.0,
+			"Pad Start" : 300,
+			"Pad End" : 300
+		},
 		"Colour Picker" : {
 			"Mode" : 4,
 			"Recent Colours" : [

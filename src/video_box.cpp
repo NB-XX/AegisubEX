@@ -31,6 +31,7 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "base_grid.h"
 #include "compat.h"
 #include "format.h"
 #include "include/aegisub/context.h"
@@ -44,6 +45,7 @@
 
 #include <boost/range/algorithm/binary_search.hpp>
 #include <wx/combobox.h>
+#include <wx/button.h>
 #include <wx/sizer.h>
 #include <wx/statline.h>
 #include <wx/textctrl.h>
@@ -56,13 +58,36 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 	auto videoSlider = new VideoSlider(this, context);
 	videoSlider->SetToolTip(_("Seek video"));
 
-	auto mainToolbar = toolbar::GetToolbar(this, "video", context, "Video", false);
+	videoToolbar = toolbar::GetToolbar(this, "video", context, "Video", false);
 
 	VideoPosition = new wxTextCtrl(this, -1, "", wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
 	VideoPosition->SetToolTip(_("Current frame time and number"));
 
 	VideoSubsPos = new wxTextCtrl(this, -1, "", wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
 	VideoSubsPos->SetToolTip(_("Time of this frame relative to start and end of current subs"));
+
+	reviewPreviewButton = new wxButton(this, wxID_ANY, to_wx("预览±1秒"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+	reviewOverlapButton = new wxButton(this, wxID_ANY, to_wx("重叠高亮：关"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+	reviewReplayButton = new wxButton(this, wxID_ANY, to_wx("改后重播：关"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+	reviewPreviewButton->Hide();
+	reviewOverlapButton->Hide();
+	reviewReplayButton->Hide();
+	reviewPreviewButton->SetToolTip(to_wx("播放当前选中字幕及其前后各1秒"));
+	reviewPreviewButton->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+		if (!this->context->project->VideoProvider()) return;
+		if (auto line = this->context->selectionController->GetActiveLine())
+			this->context->videoController->PlayReviewPreview(line->Start, line->End, this->context->ass.get());
+	});
+	reviewOverlapButton->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+		if (this->context->subsGrid)
+			this->context->subsGrid->SetOverlapHighlight(!this->context->subsGrid->IsOverlapHighlightEnabled());
+		UpdateReviewControls();
+	});
+	reviewReplayButton->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+		bool current = OPT_GET("Tool/Playback/Review Replay After Edit")->GetBool();
+		OPT_SET("Tool/Playback/Review Replay After Edit")->SetBool(!current);
+		UpdateReviewControls();
+	});
 
 	wxArrayString choices;
 	for (int i = 1; i <= 24; ++i)
@@ -84,7 +109,10 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 	topSizer->Add(videoDisplay, isDetached, isDetached ? wxEXPAND : 0);
 
 	auto videoBottomSizer = new wxBoxSizer(wxHORIZONTAL);
-	videoBottomSizer->Add(mainToolbar, wxSizerFlags(0).Center());
+	videoBottomSizer->Add(videoToolbar, wxSizerFlags(0).Center());
+	videoBottomSizer->Add(reviewPreviewButton, wxSizerFlags(0).Center().Border(wxLEFT));
+	videoBottomSizer->Add(reviewOverlapButton, wxSizerFlags(0).Center().Border(wxLEFT));
+	videoBottomSizer->Add(reviewReplayButton, wxSizerFlags(0).Center().Border(wxLEFT));
 	videoBottomSizer->Add(VideoPosition, wxSizerFlags(1).Center().Border(wxLEFT));
 	videoBottomSizer->Add(VideoSubsPos, wxSizerFlags(1).Center().Border(wxLEFT));
 	videoBottomSizer->Add(zoomBox, wxSizerFlags(0).Center().Border(wxLEFT | wxRIGHT));
@@ -103,9 +131,27 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 		context->project->AddKeyframesListener(&VideoBox::UpdateTimeBoxes, this),
 		context->project->AddTimecodesListener(&VideoBox::UpdateTimeBoxes, this),
 		context->project->AddVideoProviderListener(&VideoBox::UpdateTimeBoxes, this),
+		context->project->AddVideoProviderListener([this](AsyncVideoProvider *) { UpdateReviewControls(); }),
 		context->selectionController->AddSelectionListener(&VideoBox::UpdateTimeBoxes, this),
 		context->videoController->AddSeekListener(&VideoBox::UpdateTimeBoxes, this),
+		context->videoController->AddReviewModeListener([this](bool) { UpdateReviewControls(); }),
 	});
+	UpdateReviewControls();
+}
+
+void VideoBox::UpdateReviewControls() {
+	bool review = context->videoController->IsReviewMode();
+	toolbar::SetCommandVisible(videoToolbar, "video/opt/autoscroll", !review);
+	reviewPreviewButton->Show(review);
+	bool overlap_highlight = review && context->subsGrid && context->subsGrid->IsOverlapHighlightEnabled();
+	reviewOverlapButton->SetLabel(to_wx(overlap_highlight ? "重叠高亮：开" : "重叠高亮：关"));
+	reviewOverlapButton->SetToolTip(to_wx(overlap_highlight ? "关闭字幕时间重叠高亮" : "高亮所有时间重叠的字幕行"));
+	reviewOverlapButton->Show(review);
+	bool replay_after_edit = OPT_GET("Tool/Playback/Review Replay After Edit")->GetBool();
+	reviewReplayButton->SetLabel(to_wx(replay_after_edit ? "改后重播：开" : "改后重播：关"));
+	reviewReplayButton->SetToolTip(to_wx(replay_after_edit ? "已开启：修改过本行后离开编辑区，从该行开头重新播放" : "当前从暂停处继续播放；打开后：修改过本行则从该行开头重新播放"));
+	reviewReplayButton->Show(review);
+	Layout();
 }
 
 void VideoBox::UpdateTimeBoxes() {

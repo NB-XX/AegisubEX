@@ -75,7 +75,7 @@ class FrameMain : public wxFrame, private agi::signal::ConnectionScope {
 	AudioBox *audioBox;      ///< The audio area
 	VideoBox *videoBox;      ///< The video area
 
-	wxSizer *MainSizer;  ///< Arranges things from top to bottom in the window
+	wxSizer *MainSizer = nullptr;  ///< Arranges things from top to bottom in the window
 	wxSizer *TopSizer;   ///< Arranges video box and tool box from left to right
 	wxSizer *ToolsSizer; ///< Arranges audio and editing areas top to bottom
 

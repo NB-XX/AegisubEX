@@ -191,6 +191,75 @@ void AssStyle::UpdateData() {
 		Margin[0], Margin[1], Margin[2], encoding);
 }
 
+std::string AssStyle::GetFxData() const {
+	std::string data = agi::format("3,%d,%g,%g,%s,%d,%d,%zu",
+		glow_enabled, std::max(0.0, glow_width), std::max(0.0, glow_blur), glow_color.GetAssStyleFormatted(),
+		std::max(0, fade_in_ms), std::max(0, fade_out_ms), strokes.size());
+	for (auto const& stroke : strokes)
+		data += agi::format(",%g,%g,%s", std::max(0.0, stroke.width), std::max(0.0, stroke.blur), stroke.color.GetAssStyleFormatted());
+	return data;
+}
+
+void AssStyle::SetFxData(std::string_view data) {
+	std::vector<std::string_view> fields;
+	for (size_t begin = 0; begin <= data.size();) {
+		auto end = data.find(',', begin);
+		fields.push_back(data.substr(begin, end == data.npos ? data.size() - begin : end - begin));
+		if (end == data.npos) break;
+		begin = end + 1;
+	}
+	auto integer = [&](size_t i) { return std::stoi(std::string(fields.at(i))); };
+	auto number = [&](size_t i) { return std::stod(std::string(fields.at(i))); };
+	try {
+		if (fields.empty()) return;
+		if (fields[0] == "1" && fields.size() == 7) {
+			strokes.clear();
+			if (integer(1)) strokes.push_back({number(2), 0.0, agi::Color(fields[3])});
+			glow_enabled = false;
+			fade_in_ms = fade_out_ms = 0;
+			return;
+		}
+		bool next_glow_enabled = false;
+		double next_glow_width = glow_width, next_glow_blur = glow_blur;
+		agi::Color next_glow_color = glow_color;
+		int next_fade_in = 0, next_fade_out = 0;
+		size_t count = 0, first_stroke = 0;
+		if (fields[0] == "2" && fields.size() >= 7) {
+			// Version 2 stored a gradient; retain its strokes and fades while
+			// intentionally dropping the non-native gradient effect.
+			next_fade_in = std::clamp(integer(4), 0, 10000);
+			next_fade_out = std::clamp(integer(5), 0, 10000);
+			count = static_cast<size_t>(std::clamp(integer(6), 0, 32));
+			first_stroke = 7;
+		}
+		else if (fields[0] == "3" && fields.size() >= 8) {
+			next_glow_enabled = integer(1) != 0;
+			next_glow_width = std::clamp(number(2), 0.0, 1000.0);
+			next_glow_blur = std::clamp(number(3), 0.0, 100.0);
+			next_glow_color = agi::Color(fields[4]);
+			next_fade_in = std::clamp(integer(5), 0, 10000);
+			next_fade_out = std::clamp(integer(6), 0, 10000);
+			count = static_cast<size_t>(std::clamp(integer(7), 0, 32));
+			first_stroke = 8;
+		}
+		else return;
+		if (fields.size() != first_stroke + count * 3) return;
+		std::vector<AssStyleStroke> next_strokes;
+		next_strokes.reserve(count);
+		for (size_t i = 0; i < count; ++i)
+			next_strokes.push_back({std::clamp(number(first_stroke + i * 3), 0.0, 1000.0),
+				std::clamp(number(first_stroke + 1 + i * 3), 0.0, 100.0), agi::Color(fields[first_stroke + 2 + i * 3])});
+		strokes = std::move(next_strokes);
+		glow_enabled = next_glow_enabled;
+		glow_width = next_glow_width;
+		glow_blur = next_glow_blur;
+		glow_color = next_glow_color;
+		fade_in_ms = next_fade_in;
+		fade_out_ms = next_fade_out;
+	}
+	catch (...) { }
+}
+
 void AssStyle::GetEncodings(wxArrayString &encodingStrings) {
 	encodingStrings.Clear();
 	encodingStrings.Add(wxString("-1 - ") + _("Auto-detect base direction (libass only)"));

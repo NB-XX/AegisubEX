@@ -55,12 +55,15 @@
 #include <algorithm>
 
 #include <wx/bmpbuttn.h>
+#include <wx/button.h>
 #include <wx/checkbox.h>
 #include <wx/msgdlg.h>
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
 #include <wx/statbox.h>
+#include <wx/statline.h>
 #include <wx/stattext.h>
+#include <wx/panel.h>
 
 /// Style rename helper that walks a file searching for a style and optionally
 /// updating references to it
@@ -182,6 +185,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	wxStaticBoxSizer *ColorsSizer = new wxStaticBoxSizer(wxHORIZONTAL, this, _("Colors"));
 	wxStaticBoxSizer *MarginSizer = new wxStaticBoxSizer(wxHORIZONTAL, this, _("Margins"));
 	wxStaticBoxSizer *OutlineSizer = new wxStaticBoxSizer(wxHORIZONTAL, this, _("Outline"));
+	wxStaticBoxSizer *EffectsSizer = new wxStaticBoxSizer(wxVERTICAL, this, _("Layer Styles"));
 	wxStaticBoxSizer *MiscSizer = new wxStaticBoxSizer(wxVERTICAL, this, _("Miscellaneous"));
 	wxStaticBoxSizer *PreviewSizer = new wxStaticBoxSizer(wxVERTICAL, this, _("Preview"));
 
@@ -190,6 +194,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	wxWindow *ColorsSizerBox = ColorsSizer->GetStaticBox();
 	wxWindow *MarginSizerBox = MarginSizer->GetStaticBox();
 	wxWindow *OutlineSizerBox = OutlineSizer->GetStaticBox();
+	wxWindow *EffectsSizerBox = EffectsSizer->GetStaticBox();
 	wxWindow *MiscSizerBox = MiscSizer->GetStaticBox();
 	wxWindow *PreviewSizerBox = PreviewSizer->GetStaticBox();
 
@@ -221,6 +226,16 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	auto Angle = num_text_ctrl(MiscSizerBox, &work->angle, -360.0, 360.0, 1.0, 2);
 	auto Spacing = num_text_ctrl(MiscSizerBox, &work->spacing, 0.0, 1000.0, 0.1, 3);
 	Encoding = new wxComboBox(MiscSizerBox, -1, "", wxDefaultPosition, wxDefaultSize, encodingStrings, wxCB_READONLY);
+	EnableGlow = new wxCheckBox(EffectsSizerBox, -1, _("Enable outer glow"));
+	GlowColor = new ColourButton(EffectsSizerBox, wxSize(42, 16), true, style->glow_color, ColorValidator(&work->glow_color));
+	GlowWidth = new wxSpinCtrlDouble(EffectsSizerBox, -1, wxEmptyString, wxDefaultPosition, wxSize(72, -1), wxSP_ARROW_KEYS, 0.0, 1000.0, style->glow_width, 0.1);
+	GlowWidth->SetDigits(2);
+	GlowBlur = new wxSpinCtrlDouble(EffectsSizerBox, -1, wxEmptyString, wxDefaultPosition, wxSize(72, -1), wxSP_ARROW_KEYS, 0.0, 100.0, style->glow_blur, 0.1);
+	GlowBlur->SetDigits(2);
+	FadeInMs = new wxSpinCtrl(EffectsSizerBox, -1, std::to_wstring(style->fade_in_ms), wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 10000, style->fade_in_ms);
+	FadeOutMs = new wxSpinCtrl(EffectsSizerBox, -1, std::to_wstring(style->fade_out_ms), wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 0, 10000, style->fade_out_ms);
+	StrokeRowsSizer = new wxBoxSizer(wxVERTICAL);
+	AddStrokeButton = new wxButton(EffectsSizerBox, -1, _("Add stroke"));
 
 	// Set control tooltips
 	StyleName->SetToolTip(_("Style name"));
@@ -242,12 +257,14 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	Encoding->SetToolTip(_("Encoding, only useful in unicode if the font doesn't have the proper unicode mapping"));
 	Spacing->SetToolTip(_("Character spacing, in pixels"));
 	Alignment->SetToolTip(_("Alignment in screen, in numpad style"));
+	EnableGlow->SetToolTip(_("Add a blurred outer glow as an ASS subtitle layer"));
 
 	// Set up controls
 	BoxBold->SetValue(style->bold);
 	BoxItalic->SetValue(style->italic);
 	BoxUnderline->SetValue(style->underline);
 	BoxStrikeout->SetValue(style->strikeout);
+	EnableGlow->SetValue(style->glow_enabled);
 	OutlineType->SetSelection(BorderStyleToControl(style->borderstyle));
 	Alignment->SetSelection(AlignToControl(style->alignment));
 	// Fill font face list box
@@ -324,6 +341,16 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	add_with_label(OutlineSizerBox, OutlineSizer, _("Outline:"), Outline);
 	add_with_label(OutlineSizerBox, OutlineSizer, _("Shadow:"), Shadow);
 	add_with_label(OutlineSizerBox, OutlineSizer, _("Border style:"), OutlineType);
+	EffectsSizer->Add(new wxStaticText(EffectsSizerBox, -1, _("Additional outline layers")), wxSizerFlags().Border(wxBOTTOM));
+	EffectsSizer->Add(StrokeRowsSizer, wxSizerFlags().Expand().Border(wxBOTTOM));
+	EffectsSizer->Add(AddStrokeButton, wxSizerFlags().Border(wxBOTTOM));
+	add_with_label(EffectsSizerBox, EffectsSizer, _("Fade in (ms):"), FadeInMs);
+	add_with_label(EffectsSizerBox, EffectsSizer, _("Fade out (ms):"), FadeOutMs);
+	EffectsSizer->Add(new wxStaticLine(EffectsSizerBox), wxSizerFlags().Expand().Border(wxTOP | wxBOTTOM));
+	EffectsSizer->Add(EnableGlow, wxSizerFlags().Border(wxBOTTOM));
+	add_with_label(EffectsSizerBox, EffectsSizer, _("Glow color:"), GlowColor);
+	add_with_label(EffectsSizerBox, EffectsSizer, _("Glow width:"), GlowWidth);
+	add_with_label(EffectsSizerBox, EffectsSizer, _("Glow blur:"), GlowBlur);
 
 	// Misc
 	auto MiscBoxTop = new wxFlexGridSizer(2, 4, 5, 5);
@@ -368,6 +395,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	// Right side sizer
 	wxSizer *RightSizer = new wxBoxSizer(wxVERTICAL);
 	RightSizer->Add(OutlineSizer, wxSizerFlags().Expand().Border(wxBOTTOM));
+	RightSizer->Add(EffectsSizer, wxSizerFlags().Expand().Border(wxBOTTOM));
 	RightSizer->Add(MiscSizer, wxSizerFlags().Expand().Border(wxBOTTOM));
 	RightSizer->Add(PreviewSizer, wxSizerFlags(1).Expand());
 
@@ -381,6 +409,9 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	MainSizer->Add(ControlSizer, 1, wxALL | wxEXPAND, 5);
 	MainSizer->Add(ButtonSizer, 0, wxBOTTOM | wxEXPAND, 5);
 
+	// Create initial effect rows before sizing the dialog so they are included
+	// in its first layout calculation.
+	RebuildStrokeControls();
 	SetSizerAndFit(MainSizer);
 
 	// Force the style name text field to scroll based on its final size, rather
@@ -390,11 +421,10 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 
 	persist = std::make_unique<PersistLocation>(this, "Tool/Style Editor", true);
 
-	Bind(wxEVT_CHILD_FOCUS, &DialogStyleEditor::OnChildFocus, this);
-
 	Bind(wxEVT_CHECKBOX, &DialogStyleEditor::OnCommandPreviewUpdate, this);
 	Bind(wxEVT_COMBOBOX, &DialogStyleEditor::OnCommandPreviewUpdate, this);
 	Bind(wxEVT_SPINCTRL, &DialogStyleEditor::OnCommandPreviewUpdate, this);
+	Bind(wxEVT_SPINCTRLDOUBLE, &DialogStyleEditor::OnCommandPreviewUpdate, this);
 
 	previewButton->Bind(EVT_COLOR, &DialogStyleEditor::OnPreviewColourChange, this);
 	FontName->Bind(wxEVT_TEXT_ENTER, &DialogStyleEditor::OnCommandPreviewUpdate, this);
@@ -404,9 +434,16 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	Bind(wxEVT_BUTTON, std::bind(&DialogStyleEditor::Apply, this, true, false), wxID_APPLY);
 	Bind(wxEVT_BUTTON, std::bind(&DialogStyleEditor::Apply, this, false, true), wxID_CANCEL);
 	Bind(wxEVT_BUTTON, std::bind(&HelpButton::OpenPage, "Style Editor"), wxID_HELP);
+	AddStrokeButton->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+		if (work->strokes.size() >= 32) return;
+		work->strokes.push_back({2.0, 0.0, work->outline});
+		CallAfter([this] { RebuildStrokeControls(true); });
+		SubsPreview->SetStyle(*work);
+	});
 
 	for (auto const& elem : colorButton)
 		elem->Bind(EVT_COLOR, &DialogStyleEditor::OnSetColor, this);
+	GlowColor->Bind(EVT_COLOR, &DialogStyleEditor::OnSetColor, this);
 }
 
 DialogStyleEditor::~DialogStyleEditor() {
@@ -505,17 +542,72 @@ void DialogStyleEditor::UpdateWorkStyle() {
 	work->italic = BoxItalic->IsChecked();
 	work->underline = BoxUnderline->IsChecked();
 	work->strikeout = BoxStrikeout->IsChecked();
+	work->glow_enabled = EnableGlow->IsChecked();
+	work->glow_width = GlowWidth->GetValue();
+	work->glow_blur = GlowBlur->GetValue();
+	work->fade_in_ms = FadeInMs->GetValue();
+	work->fade_out_ms = FadeOutMs->GetValue();
+}
+
+void DialogStyleEditor::RebuildStrokeControls(bool append) {
+	if (!append) {
+		for (auto panel : stroke_row_panels) {
+			StrokeRowsSizer->Detach(panel);
+			panel->Destroy();
+		}
+		stroke_row_panels.clear();
+	}
+
+	auto parent = StrokeRowsSizer->GetContainingWindow();
+	for (size_t i = stroke_row_panels.size(); i < work->strokes.size(); ++i) {
+		auto panel = new wxPanel(parent);
+		auto row = new wxBoxSizer(wxHORIZONTAL);
+		row->Add(new wxStaticText(panel, -1, wxString::Format(_("Stroke %d"), static_cast<int>(i + 1))), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+		auto color = new ColourButton(panel, wxSize(42, 16), true, work->strokes[i].color);
+		row->Add(color, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+		row->Add(new wxStaticText(panel, -1, _("Width")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 3);
+		auto width = new wxSpinCtrlDouble(panel, -1, wxEmptyString, wxDefaultPosition, wxSize(72, -1), wxSP_ARROW_KEYS, 0.0, 1000.0, work->strokes[i].width, 0.1);
+		width->SetDigits(2);
+		row->Add(width, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+		row->Add(new wxStaticText(panel, -1, _("Blur")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 3);
+		auto blur = new wxSpinCtrlDouble(panel, -1, wxEmptyString, wxDefaultPosition, wxSize(72, -1), wxSP_ARROW_KEYS, 0.0, 100.0, work->strokes[i].blur, 0.1);
+		blur->SetDigits(2);
+		row->Add(blur, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+		auto remove = new wxButton(panel, -1, _("Remove"));
+		row->Add(remove, 0, wxALIGN_CENTER_VERTICAL);
+		panel->SetSizer(row);
+		StrokeRowsSizer->Add(panel, 0, wxEXPAND | wxBOTTOM, 3);
+		stroke_row_panels.push_back(panel);
+
+		color->Bind(EVT_COLOR, [this, i](ValueEvent<agi::Color>& evt) {
+			if (i >= work->strokes.size()) return;
+			work->strokes[i].color = evt.Get();
+			SubsPreview->SetStyle(*work);
+		});
+		auto update_stroke = [this, i, width, blur](wxSpinDoubleEvent& evt) {
+			if (i < work->strokes.size()) {
+				work->strokes[i].width = width->GetValue();
+				work->strokes[i].blur = blur->GetValue();
+				SubsPreview->SetStyle(*work);
+			}
+			evt.Skip();
+		};
+		width->Bind(wxEVT_SPINCTRLDOUBLE, update_stroke);
+		blur->Bind(wxEVT_SPINCTRLDOUBLE, update_stroke);
+		remove->Bind(wxEVT_BUTTON, [this, i](wxCommandEvent &) {
+			if (i >= work->strokes.size()) return;
+			work->strokes.erase(work->strokes.begin() + i);
+			CallAfter([this] { RebuildStrokeControls(); });
+			SubsPreview->SetStyle(*work);
+		});
+	}
+	AddStrokeButton->Enable(work->strokes.size() < 32);
+	Layout();
 }
 
 void DialogStyleEditor::OnSetColor(ValueEvent<agi::Color>&) {
 	TransferDataFromWindow();
 	SubsPreview->SetStyle(*work);
-}
-
-void DialogStyleEditor::OnChildFocus(wxChildFocusEvent &event) {
-	UpdateWorkStyle();
-	SubsPreview->SetStyle(*work);
-	event.Skip();
 }
 
 void DialogStyleEditor::OnPreviewTextChange (wxCommandEvent &event) {

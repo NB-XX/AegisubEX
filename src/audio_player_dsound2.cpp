@@ -44,6 +44,12 @@
 #include <libaegisub/scoped_ptr.h>
 #include <libaegisub/log.h>
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <vector>
+
 #include <mmsystem.h>
 #include <process.h>
 #include <dsound.h>
@@ -108,6 +114,12 @@ public:
 	/// @brief Change playback volume
 	/// @param vol Amplification factor
 	void SetVolume(double vol);
+
+	/// @brief Change playback rate so the audio follows the video clock
+	/// @param speed Multiplier, 1.0 is normal; the streamed samples are
+	/// time-stretched so pitch is preserved at other speeds
+	/// @return Achieved multiplier, or 0 when the format cannot be stretched
+	double SetSpeed(double speed);
 };
 
 /// @brief RAII support class to init and de-init the COM library
@@ -142,6 +154,207 @@ struct ReleaseCOMObject {
 
 template<typename T>
 using COMObjectRetainer = std::unique_ptr<T, ReleaseCOMObject>;
+
+/// @brief Streaming WSOLA time-stretcher for pitch-preserved fast/slow playback
+///
+/// Simply playing the buffer at a changed frequency is like fast-forwarding
+/// a tape: everything comes out faster *and* higher pitched. Video sites
+/// instead cut the audio into short natural-pitch segments, move along the
+/// content faster (or slower) than the segments play out, and crossfade the
+/// splices (weighted overlap-add). The buffer then runs at its natural
+/// frequency, so the pitch stays normal while the content still advances
+/// speed times per wall-clock second and stays in sync with the video.
+class TimeStretchEngine {
+	agi::AudioProvider *provider = nullptr;
+	int channels = 1;
+	int bytes_per_sample = 2;
+	bool float_samples = false;
+
+	/// Output frames produced per segment hop (about 20 ms)
+	int hop = 0;
+	/// Segment length in frames; equals 2 * hop (hann windowed, 50 % overlap)
+	int frame_len = 0;
+	/// Half-width in content frames of the position search per hop
+	int search = 0;
+	/// Content frames consumed per hop; hop * speed
+	double step = 1.0;
+
+	/// Hann window over frame_len samples (rises then falls, sums to 1 at hop offset)
+	std::vector<double> hann;
+
+	/// Content frame where the next segment starts
+	double cursor = 0;
+	/// Content frame to stop fetching audio at (silence beyond)
+	int64_t limit = 0;
+
+	/// Last fetched content window, converted to double
+	std::vector<double> win;
+	int64_t win_start = 0;
+	int64_t win_frames = 0;
+	/// Provider-format staging buffer for the fetch
+	std::vector<uint8_t> tmp;
+
+	/// This hop's finalized output samples (hop * channels)
+	std::vector<double> emit;
+	/// The still-unplayed faded tail of the previous segment
+	std::vector<double> tail;
+	size_t emit_pos = 0;
+
+	/// Fetch at most count content frames starting at start; clamps to limit
+	void FetchWindow(int64_t start, int64_t count, double volume)
+	{
+		win_start = start;
+		win_frames = count;
+		if (count <= 0)
+			return;
+
+		tmp.resize(static_cast<size_t>(count) * channels * bytes_per_sample);
+		provider->GetAudioWithVolume(tmp.data(), start, count, volume);
+
+		size_t const n = static_cast<size_t>(count) * channels;
+		win.resize(n);
+		if (bytes_per_sample == 2) {
+			auto const *src = reinterpret_cast<int16_t const *>(tmp.data());
+			for (size_t i = 0; i < n; ++i) win[i] = src[i];
+		}
+		else if (float_samples) {
+			auto const *src = reinterpret_cast<float const *>(tmp.data());
+			for (size_t i = 0; i < n; ++i) win[i] = src[i];
+		}
+		else {
+			auto const *src = reinterpret_cast<int32_t const *>(tmp.data());
+			for (size_t i = 0; i < n; ++i) win[i] = src[i];
+		}
+	}
+
+	/// Sample at a content frame, or silence outside the fetched window
+	double At(int64_t frame, int ch) const
+	{
+		int64_t const rel = frame - win_start;
+		if (rel < 0 || rel >= win_frames)
+			return 0.0;
+		return win[static_cast<size_t>(rel) * channels + ch];
+	}
+
+	/// Write one double sample out in the provider's sample format
+	void Put(void *dst, int64_t frame, int ch, double v) const
+	{
+		size_t const i = static_cast<size_t>(frame) * channels + ch;
+		if (bytes_per_sample == 2) {
+			int const s = static_cast<int>(std::lround(v));
+			reinterpret_cast<int16_t *>(dst)[i] = static_cast<int16_t>(std::clamp(s, -32768, 32767));
+		}
+		else if (float_samples) {
+			reinterpret_cast<float *>(dst)[i] = static_cast<float>(std::clamp(v, -1.0, 1.0));
+		}
+		else {
+			int64_t const s = std::llround(v);
+			reinterpret_cast<int32_t *>(dst)[i] = static_cast<int32_t>(std::clamp<int64_t>(s, -2147483647LL - 1, 2147483647LL));
+		}
+	}
+
+	/// Produce one hop's worth of output samples into emit
+	void RunHop(double volume)
+	{
+		int64_t const e = static_cast<int64_t>(std::floor(cursor + 0.5));
+		int64_t const nominal = static_cast<int64_t>(std::floor(cursor + step + 0.5));
+
+		// Need this segment plus the candidate heads for the next start search
+		int64_t const reach = std::max<int64_t>(frame_len, (nominal + search + hop) - e) + 2;
+		FetchWindow(e, std::max<int64_t>(0, std::min(reach, limit - e)), volume);
+
+		for (int f = 0; f < hop; ++f)
+			for (int ch = 0; ch < channels; ++ch) {
+				size_t const i = static_cast<size_t>(f) * channels + ch;
+				emit[i] = tail[i] + At(e + f, ch) * hann[f];
+				tail[i] = At(e + hop + f, ch) * hann[hop + f];
+			}
+
+		// WSOLA similarity search: pick the next segment's start so that its
+		// head matches the phase of this segment's tail as closely as the
+		// content allows, which keeps the crossfaded splices smooth.
+		int best = 0;
+		double best_cost = std::numeric_limits<double>::max();
+		for (int d = -search; d <= search; d += 2) {
+			double cost = 0.0;
+			for (int f = 0; f < hop; f += 2)
+				for (int ch = 0; ch < channels; ++ch) {
+					double const diff = At(e + hop + f, ch) - At(nominal + d + f, ch);
+					cost += diff * diff;
+				}
+			if (cost < best_cost) {
+				best_cost = cost;
+				best = d;
+			}
+		}
+
+		cursor = static_cast<double>(nominal + best);
+		emit_pos = 0;
+	}
+
+public:
+	/// Can samples from this provider be stretched? (16-bit, 32-bit int or float)
+	static bool Supported(agi::AudioProvider const *provider)
+	{
+		int const bps = provider->GetBytesPerSample();
+		return bps == 2 || bps == 4;
+	}
+
+	/// @brief Bind to a provider and prepare per-format state
+	/// Call once before Reset/Generate.
+	void SetProvider(agi::AudioProvider *p)
+	{
+		provider = p;
+		channels = std::max(1, p->GetChannels());
+		bytes_per_sample = p->GetBytesPerSample();
+		float_samples = p->AreSamplesFloat();
+		hop = std::max(32, p->GetSampleRate() / 50);
+		frame_len = 2 * hop;
+		search = std::max(4, hop / 2);
+
+		double const pi = std::acos(-1.0);
+		hann.resize(frame_len);
+		for (int i = 0; i < frame_len; ++i)
+			hann[i] = 0.5 - 0.5 * std::cos(pi * i / hop);
+
+		tail.assign(static_cast<size_t>(hop) * channels, 0.0);
+		emit.assign(static_cast<size_t>(hop) * channels, 0.0);
+	}
+
+	/// @brief Restart stretching from a content position
+	/// @param start First content frame to play
+	/// @param end Content frame to go silent after
+	/// @param speed Content frames consumed per output frame multiplier
+	void Reset(int64_t start, int64_t end, double speed)
+	{
+		cursor = static_cast<double>(start);
+		limit = end;
+		step = hop * speed;
+		std::fill(tail.begin(), tail.end(), 0.0);
+		emit_pos = emit.size(); // force a fresh hop on first Generate
+	}
+
+	/// Follow playback end changes (audio display drags)
+	void SetLimit(int64_t end) { limit = end; }
+
+	/// @brief Produce stretched output frames into the DirectSound buffer
+	/// @param dst   Locked buffer memory, provider sample format
+	/// @param frames Number of output frames to write
+	/// @param volume Amplification applied when fetching input
+	void Generate(void *dst, int64_t frames, double volume)
+	{
+		for (int64_t f = 0; f < frames; ++f) {
+			if (emit_pos >= emit.size())
+				RunHop(volume);
+			for (int ch = 0; ch < channels; ++ch)
+				Put(dst, f, ch, emit[emit_pos + ch]);
+			emit_pos += channels;
+		}
+	}
+
+	/// Content frame the stretcher is working at (for end-of-clip bookkeeping)
+	int64_t Cursor() const { return static_cast<int64_t>(std::floor(cursor)); }
+};
 
 /// @brief RAII wrapper around Win32 HANDLE type
 struct Win32KernelHandle final : public agi::scoped_holder<HANDLE, BOOL (__stdcall *)(HANDLE)> {
@@ -201,6 +414,9 @@ class DirectSoundPlayer2Thread {
 	/// Event object, world to thread, set if the volume was changed
 	Win32KernelHandle event_set_volume;
 
+	/// Event object, world to thread, set if the playback speed was changed
+	Win32KernelHandle event_set_speed;
+
 	/// Event object, world to thread, set if the thread should end as soon as possible
 	Win32KernelHandle event_kill_self;
 
@@ -219,6 +435,14 @@ class DirectSoundPlayer2Thread {
 	/// Playback volume, 1.0 is "unchanged"
 	double volume = 1.0;
 
+	/// Playback speed actually in effect; the position estimate scales
+	/// wall-clock elapsed by it. Written by the thread only.
+	volatile double speed = 1.0;
+
+	/// Speed requested via SetSpeed; the thread applies it and copies it
+	/// into speed.
+	volatile double pending_speed = 1.0;
+
 	/// Audio frame to start playback at
 	int64_t start_frame = 0;
 
@@ -236,6 +460,13 @@ class DirectSoundPlayer2Thread {
 
 	/// Audio provider to take sample data from
 	agi::AudioProvider *provider;
+
+	/// True when the provider's sample format supports time stretching, so
+	/// that speeds other than 1.0 preserve pitch instead of shifting it
+	bool stretch_mode = false;
+
+	/// Pitch-preserving stretch engine, used when stretch_mode and speed != 1.0
+	TimeStretchEngine stretcher;
 
 public:
 	/// @brief Constructor, creates and starts playback thread
@@ -263,6 +494,14 @@ public:
 	/// @brief Change audio playback volume
 	/// @param new_volume New playback amplification factor, 1.0 is "unchanged"
 	void SetVolume(double new_volume);
+
+	/// @brief Change playback speed, preserving pitch when the format allows
+	/// @param speed Multiplier, 1.0 is normal
+	/// @return The multiplier actually achieved, or 0 when the player can
+	/// neither time-stretch nor reach the matching buffer frequency (then
+	/// audio would drift against the video clock, so the caller should stay
+	/// silent instead)
+	double SetSpeed(double speed);
 
 	/// @brief Tell whether audio playback is active
 	/// @return True if audio is being played back, false if it is not
@@ -331,7 +570,7 @@ void DirectSoundPlayer2Thread::Run()
 	DWORD bufSize = mid(min,aim,max); // size of entire playback buffer
 	DSBUFFERDESC desc;
 	desc.dwSize = sizeof(DSBUFFERDESC);
-	desc.dwFlags = DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_GLOBALFOCUS;
+	desc.dwFlags = DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_GLOBALFOCUS | DSBCAPS_CTRLFREQUENCY;
 	desc.dwBufferBytes = bufSize;
 	desc.dwReserved = 0;
 	desc.lpwfxFormat = &waveFormat;
@@ -361,6 +600,7 @@ void DirectSoundPlayer2Thread::Run()
 		event_stop_playback,
 		event_update_end_time,
 		event_set_volume,
+		event_set_speed,
 		event_kill_self
 	};
 
@@ -372,16 +612,25 @@ void DirectSoundPlayer2Thread::Run()
 
 	while (running)
 	{
-		DWORD wait_result = WaitForMultipleObjects(sizeof(events_to_wait)/sizeof(HANDLE), events_to_wait, FALSE, current_latency);
+		// In stretch mode the buffer always drains at its natural rate (only
+		// the content inside it is sped up), so no rate compensation is
+		// needed. Legacy pitch-shifting playback drains faster at higher
+		// speeds, so wake up sooner to keep refilling ahead of the cursor.
+		double const drain = stretch_mode ? 1.0 : std::max(0.25, 1.0 / speed);
+		DWORD wait_ms = static_cast<DWORD>(current_latency * drain);
+		DWORD wait_result = WaitForMultipleObjects(sizeof(events_to_wait)/sizeof(HANDLE), events_to_wait, FALSE, wait_ms);
 
 		switch (wait_result)
 		{
 		case WAIT_OBJECT_0+0:
+restart_playback:
 			{
 				// Start or restart playback
 				bfr->Stop();
 
 				next_input_frame = start_frame;
+				if (stretch_mode)
+					stretcher.Reset(start_frame, end_frame, speed);
 
 				DWORD buf_size; // size of buffer locked for filling
 				void *buf;
@@ -467,6 +716,53 @@ stop_playback:
 			goto do_fill_buffer;
 
 		case WAIT_OBJECT_0+4:
+			// Change playback speed
+			{
+				if (stretch_mode) {
+					// The buffer keeps running at its natural frequency (so
+					// pitch is unchanged); only the content advance per second
+					// changes, matching the video controller's virtual clock.
+					// Fold the elapsed samples into start_frame first to keep
+					// the tick-based position estimate continuous, then refill
+					// the buffer from there with the new stretch ratio.
+					if (playback_should_be_running)
+					{
+						DWORD elapsed = GetTickCount() - last_playback_restart;
+						start_frame += static_cast<int64_t>(elapsed * provider->GetSampleRate() * speed / 1000.0);
+						last_playback_restart = GetTickCount();
+					}
+					speed = pending_speed;
+					if (playback_should_be_running)
+						goto restart_playback;
+					break;
+				}
+
+				// Legacy providers with unsupported sample formats: the
+				// buffer consumes its samples at the new frequency, so
+				// content time advances speed-times wall-clock time at the
+				// cost of a matching pitch shift.
+				DWORD new_hz = static_cast<DWORD>(provider->GetSampleRate() * pending_speed);
+				if (FAILED(bfr->SetFrequency(new_hz)))
+				{
+					// Shouldn't happen (SetSpeed pre-checks the documented
+					// frequency range); keep the old speed rather than let
+					// the audio drift.
+					pending_speed = speed;
+					break;
+				}
+				// Keep the tick-based position estimate continuous across the
+				// change: fold the elapsed samples into start_frame first.
+				if (playback_should_be_running)
+				{
+					DWORD elapsed = GetTickCount() - last_playback_restart;
+					start_frame += static_cast<int64_t>(elapsed * provider->GetSampleRate() * speed / 1000.0);
+					last_playback_restart = GetTickCount();
+				}
+				speed = pending_speed;
+			}
+			break;
+
+		case WAIT_OBJECT_0+5:
 			// Perform suicide
 			running = false;
 			goto stop_playback;
@@ -597,6 +893,26 @@ DWORD DirectSoundPlayer2Thread::FillAndUnlockBuffers(void *buf1, DWORD buf1sz, v
 		return buf1sz + buf2sz;
 	}
 
+	if (stretch_mode && speed != 1.0)
+	{
+		// Pitch-preserved speed change: hand the buffer stretched samples
+		// and advance the cursor by the content the stretcher consumed. The
+		// engine fades to silence itself as the cursor passes end_frame.
+		stretcher.SetLimit(end_frame);
+
+		if (buf1 && buf1sz)
+			stretcher.Generate(buf1, buf1szf, volume);
+
+		if (buf2 && buf2sz)
+			stretcher.Generate(buf2, buf2szf, volume);
+
+		input_frame = stretcher.Cursor();
+
+		bfr->Unlock(buf1, buf1sz, buf2, buf2sz);
+
+		return buf1sz + buf2sz;
+	}
+
 	if (buf1 && buf1sz)
 	{
 		if (buf1szf + input_frame > end_frame)
@@ -664,6 +980,7 @@ DirectSoundPlayer2Thread::DirectSoundPlayer2Thread(agi::AudioProvider *provider,
 , event_stop_playback   (CreateEvent(0, FALSE, FALSE, 0))
 , event_update_end_time (CreateEvent(0, FALSE, FALSE, 0))
 , event_set_volume      (CreateEvent(0, FALSE, FALSE, 0))
+, event_set_speed       (CreateEvent(0, FALSE, FALSE, 0))
 , event_kill_self       (CreateEvent(0, FALSE, FALSE, 0))
 , thread_running        (CreateEvent(0,  TRUE, FALSE, 0))
 , is_playing            (CreateEvent(0,  TRUE, FALSE, 0))
@@ -672,6 +989,11 @@ DirectSoundPlayer2Thread::DirectSoundPlayer2Thread(agi::AudioProvider *provider,
 , buffer_length(BufferLength)
 , provider(provider)
 {
+	if (TimeStretchEngine::Supported(provider)) {
+		stretch_mode = true;
+		stretcher.SetProvider(provider);
+	}
+
 	thread_handle = (HANDLE)_beginthreadex(0, 0, ThreadProc, this, 0, 0);
 
 	if (!thread_handle)
@@ -747,6 +1069,38 @@ void DirectSoundPlayer2Thread::SetVolume(double new_volume)
 	SetEvent(event_set_volume);
 }
 
+double DirectSoundPlayer2Thread::SetSpeed(double new_speed)
+{
+	CheckError();
+
+	if (new_speed <= 0.0) return 0.0;
+
+	if (stretch_mode) {
+		// Pitch is preserved by time-stretching the streamed samples instead
+		// of changing the buffer frequency, so the device's supported
+		// frequency range does not limit what the video clock can run at.
+		pending_speed = new_speed;
+		SetEvent(event_set_speed);
+		return pending_speed;
+	}
+
+	DWORD const natural = provider->GetSampleRate();
+	DWORD const target = new_speed == 1.0 ? natural : static_cast<DWORD>(natural * new_speed);
+
+	// Legacy fallback (unsupported sample format): the frequency must sit
+	// inside the range IDirectSoundBuffer::SetFrequency documents; outside it
+	// the call is refused, the audio would keep its old rate and drift
+	// against the video clock, so the caller mutes instead.
+	if (target < DSBFREQUENCY_MIN || target > DSBFREQUENCY_MAX) return 0.0;
+
+	pending_speed = static_cast<double>(target) / natural;
+	SetEvent(event_set_speed);
+
+	// The playback thread applies the change asynchronously; report the rate
+	// it is about to run at so the caller's clock matches.
+	return pending_speed;
+}
+
 bool DirectSoundPlayer2Thread::IsPlaying()
 {
 	CheckError();
@@ -776,7 +1130,12 @@ int64_t DirectSoundPlayer2Thread::GetCurrentFrame()
 
 	int64_t milliseconds_elapsed = GetTickCount() - last_playback_restart;
 
-	return start_frame + milliseconds_elapsed * provider->GetSampleRate() / 1000;
+	// Content is consumed at speed times the natural rate either way: in
+	// stretch mode the streamed samples themselves are compressed in time
+	// while the buffer runs at its natural frequency, and in the legacy
+	// fallback the buffer plays faster with a matching pitch shift. Either
+	// way the heard frame advances proportionally faster than wall-clock.
+	return start_frame + static_cast<int64_t>(milliseconds_elapsed * provider->GetSampleRate() * speed / 1000.0);
 }
 
 int64_t DirectSoundPlayer2Thread::GetEndFrame()
@@ -923,6 +1282,20 @@ void DirectSoundPlayer2::SetVolume(double vol)
 	catch (const char *msg)
 	{
 		LOG_E("audio/player/dsound") << msg;
+	}
+}
+
+double DirectSoundPlayer2::SetSpeed(double speed)
+{
+	try
+	{
+		if (!IsThreadAlive()) return 0.0;
+		return thread->SetSpeed(speed);
+	}
+	catch (const char *msg)
+	{
+		LOG_E("audio/player/dsound") << msg;
+		return 0.0;
 	}
 }
 }

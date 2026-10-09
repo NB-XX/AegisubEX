@@ -545,6 +545,14 @@ endif
 subdir('automation')
 subdir('libaegisub')
 subdir('packages')
+python3 = import('python').find_installation()
+zh_cn_catalog = custom_target('zh_CN-catalog',
+                              input: 'po/zh_CN.po',
+                              output: 'aegisub-zh_CN.mo',
+                              command: [python3, files('tools/compile_po.py'), '@INPUT@', '@OUTPUT@'],
+                              build_by_default: true,
+                              install: true,
+                              install_dir: localedir / 'zh_CN' / 'LC_MESSAGES')
 subdir('po')
 subdir('src')
 if get_option('tests')
@@ -556,7 +564,7 @@ aegisub_cpp_pch = ['src/include/agi_pre.h']
 aegisub_c_pch = ['src/include/agi_pre_c.h']
 
 link_args = []
-link_depends = []
+link_depends = [zh_cn_catalog]
 if host_machine.system() == 'windows'
     manifest_file = configure_file(copy: true, input: 'src/res/aegisub.exe.manifest', output: 'aegisub.exe.manifest')
     link_args += ['/MANIFEST:EMBED', '/MANIFESTINPUT:@0@'.format(manifest_file)]

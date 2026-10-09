@@ -15,6 +15,286 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
+# Local prototype UI strings
+msgid "Frame Match Assistant"
+msgstr "对帧辅助"
+
+msgid "Frame Match"
+msgstr "对帧"
+
+msgid "Batch Frame Match"
+msgstr "批量对帧"
+
+msgid "Match selected subtitle rows using the last picked subtitle region"
+msgstr "使用上次框选的字幕区域，对所有选中字幕行批量对帧"
+
+msgid "Pick a subtitle region with Frame Match before running batch matching."
+msgstr "请先使用“对帧”工具框选一个字幕区域，再执行批量对帧。"
+
+msgid "Matching selected subtitle rows using the saved region..."
+msgstr "正在使用已保存的字幕区域批量对帧……"
+
+#, c-format
+msgid "Matching row %d of %d..."
+msgstr "正在处理第 %d/%d 行……"
+
+msgid "batch match subtitle timings"
+msgstr "批量对帧"
+
+msgid "Re-running rows that collided with a neighbour..."
+msgstr "检测到时间轴覆盖，正在用更严格的匹配度重跑冲突行……"
+
+msgid "Re-running collided rows with a stricter threshold..."
+msgstr "仍有时间轴覆盖，正在进一步提高匹配度重跑……"
+
+msgid "Pick a tight box around the full source subtitle on a frame where it is visible"
+msgstr "暂停在原字幕显示的画面上，框选整条原字幕"
+
+msgid "Select a subtitle line, pause on a frame where its source subtitle is visible, then drag a tight box around the whole source subtitle."
+msgstr "请先选择要对帧的字幕行，将播放头停在原字幕可见的画面，再框选完整的原字幕区域。"
+
+msgid "Video or script dimensions are not available."
+msgstr "无法获取视频或字幕脚本的画面尺寸。"
+
+msgid "The loaded video has no frames."
+msgstr "当前视频没有可读取的画面。"
+
+msgid "Comparing the whole subtitle-region pattern in both directions..."
+msgstr "正在向前、向后比对整条字幕区域……"
+
+msgid "Could not read the selected video region: "
+msgstr "无法读取所选视频区域："
+
+msgid "Could not scan video frames: "
+msgstr "无法分析视频画面："
+
+msgid "The selected area is too small. Drag a box around the whole subtitle."
+msgstr "所选区域太小，请框选整条字幕。"
+
+msgid "No clear subtitle-color pattern was found in this box. Pause while the subtitle is visible and draw a tighter box around its text."
+msgstr "框内没有检测到清晰的字幕颜色图案。请暂停在字幕显示时，并贴近文字重新框选。"
+
+msgid "The selected region did not produce a valid interval. Adjust the box or similarity threshold and try again."
+msgstr "所选区域未能形成有效时间区间。请调整框选范围或匹配阈值后重试。"
+
+msgid "match subtitle timing to picked region"
+msgstr "按所选字幕区域匹配时间"
+
+msgid "Minimum region similarity (%):"
+msgstr "字幕区域最低相似度（%）："
+
+msgid "Rerun similarity step (%):"
+msgstr "覆盖重跑匹配度步长（%）："
+
+msgid "Layer Styles"
+msgstr "图层特效"
+
+msgid "Second stroke"
+msgstr "双层描边"
+
+msgid "Additional outline layers"
+msgstr "额外描边图层"
+
+msgid "Add stroke"
+msgstr "添加描边"
+
+msgid "Fade in (ms):"
+msgstr "淡入时长（毫秒）："
+
+msgid "Fade out (ms):"
+msgstr "淡出时长（毫秒）："
+
+#, c-format
+msgid "Stroke %d"
+msgstr "描边 %d"
+
+msgid "Width"
+msgstr "宽度"
+
+msgid "Blur"
+msgstr "模糊"
+
+msgid "Remove"
+msgstr "移除"
+
+msgid "Enable outer glow"
+msgstr "启用外发光"
+
+msgid "Glow color:"
+msgstr "发光颜色："
+
+msgid "Glow width:"
+msgstr "发光宽度："
+
+msgid "Glow blur:"
+msgstr "发光模糊："
+
+msgid "Add a blurred outer glow as an ASS subtitle layer"
+msgstr "添加模糊外发光，并转换为 ASS 字幕图层"
+
+msgid "Subtitle Format Review"
+msgstr "字幕格式审查"
+
+#, c-format
+msgid "Found %d errors and %d warnings. The subtitle was not loaded, so your current document is unchanged."
+msgstr "发现 %d 个错误、%d 个警告。字幕尚未载入，当前文档未更改。"
+
+msgid "Severity"
+msgstr "级别"
+
+msgid "Line"
+msgstr "行号"
+
+msgid "Problem"
+msgstr "问题"
+
+msgid "Suggested fix"
+msgstr "修复建议"
+
+msgid "Error"
+msgstr "错误"
+
+msgid "Warning"
+msgstr "警告"
+
+msgid "Close"
+msgstr "关闭"
+
+msgid "文本含有替换字符，可能是编码识别错误"
+msgstr "文本含有替换字符，可能是编码识别错误"
+
+msgid "尝试“使用字符集打开”，检查 UTF-8、GBK 或 Big5。"
+msgstr "尝试“使用字符集打开”，检查 UTF-8、GBK 或 Big5。"
+
+msgid "样式字段数量错误：应为 23 项，实际为 "
+msgstr "样式字段数量错误：应为 23 项，实际为 "
+
+msgid "检查逗号是否缺失或多出；确认样式行符合 [V4+ Styles] 的字段顺序。"
+msgstr "检查逗号是否缺失或多出；确认样式行符合 [V4+ Styles] 的字段顺序。"
+
+msgid "字体大小不是有效数字："
+msgstr "字体大小不是有效数字："
+
+msgid "填写数字，例如 48 或 36.5。"
+msgstr "填写数字，例如 48 或 36.5。"
+
+msgid "样式字段“"
+msgstr "样式字段“"
+
+msgid "”应为整数："
+msgstr "”应为整数："
+
+msgid "检查粗体、斜体、边框、对齐、边距和编码字段。"
+msgstr "检查粗体、斜体、边框、对齐、边距和编码字段。"
+
+msgid "样式数值字段格式错误："
+msgstr "样式数值字段格式错误："
+
+msgid "该字段应为数字，请删除多余字符或替换错误的小数符号。"
+msgstr "该字段应为数字，请删除多余字符或替换错误的小数符号。"
+
+msgid "颜色字段格式错误："
+msgstr "颜色字段格式错误："
+
+msgid "ASS 颜色使用 &HAABBGGRR 格式，例如 &H00FFFFFF。"
+msgstr "ASS 颜色使用 &HAABBGGRR 格式，例如 &H00FFFFFF。"
+
+msgid "字幕行字段不足：需要 Layer、起止时间、样式等 10 项"
+msgstr "字幕行字段不足：需要图层、起止时间、样式等 10 项"
+
+msgid "检查逗号和字段顺序；Text 内容中的逗号可以保留。"
+msgstr "检查逗号和字段顺序；文本内容中的逗号可以保留。"
+
+msgid "图层编号不是整数："
+msgstr "图层编号不是整数："
+
+msgid "将 Layer 改为整数，例如 0。"
+msgstr "将图层编号改为整数，例如 0。"
+
+msgid "开始时间格式错误："
+msgstr "开始时间格式错误："
+
+msgid "ASS 时间格式为 H:MM:SS.cc，例如 0:01:23.45。"
+msgstr "ASS 时间格式为 H:MM:SS.cc，例如 0:01:23.45。"
+
+msgid "结束时间格式错误："
+msgstr "结束时间格式错误："
+
+msgid "ASS 时间格式为 H:MM:SS.cc，例如 0:01:25.00。"
+msgstr "ASS 时间格式为 H:MM:SS.cc，例如 0:01:25.00。"
+
+msgid "结束时间不晚于开始时间"
+msgstr "结束时间不晚于开始时间"
+
+msgid "确认起止时间没有写反，且字幕时长大于 0。"
+msgstr "确认起止时间没有写反，且字幕时长大于 0。"
+
+msgid "字幕边距字段不是整数："
+msgstr "字幕边距字段不是整数："
+
+msgid "MarginL、MarginR、MarginV 都应为整数。"
+msgstr "左、右、垂直边距都应为整数。"
+
+msgid "引用了未定义的样式："
+msgstr "引用了未定义的样式："
+
+msgid "在 [V4+ Styles] 添加同名样式，或修正此行的 Style 名称。"
+msgstr "在 [V4+ Styles] 添加同名样式，或修正此行的样式名称。"
+
+msgid "未找到有效的 SRT 时间戳行"
+msgstr "未找到有效的 SRT 时间戳行"
+
+msgid "格式示例：00:00:01,200 --> 00:00:03,400；检查箭头、冒号和毫秒逗号。"
+msgstr "格式示例：00:00:01,200 --> 00:00:03,400；检查箭头、冒号和毫秒逗号。"
+
+msgid "时间戳中的分钟、秒或毫秒超出范围"
+msgstr "时间戳中的分钟、秒或毫秒超出范围"
+
+msgid "分钟和秒应小于 60，毫秒应为 0–999。"
+msgstr "分钟和秒应小于 60，毫秒应为 0–999。"
+
+msgid "字幕块没有正文文本"
+msgstr "字幕块没有正文文本"
+
+msgid "在时间戳下一行添加字幕内容。"
+msgstr "在时间戳下一行添加字幕内容。"
+
+msgid "解析器拒绝了文件内容："
+msgstr "解析器拒绝了文件内容："
+
+msgid "检查对应行的字段、时间戳和字符编码；若错误描述未指出字段，可复制该行到审查器或手动修正。"
+msgstr "检查对应行的字段、时间戳和字符编码；若错误描述未指出字段，可按行号定位并手动修正。"
+
+msgid "Parser: "
+msgstr "解析器信息："
+
+msgid "Outer stroke width:"
+msgstr "外层描边宽度："
+
+msgid "Outer stroke color:"
+msgstr "外层描边颜色："
+
+msgid "Enable an additional outer stroke as a separate ASS layer"
+msgstr "启用额外外描边，并转换为独立 ASS 图层"
+
+msgid "Batch Apply Override Tags"
+msgstr "批量应用覆盖标签"
+
+msgid "Batch Apply Override Tags..."
+msgstr "批量应用覆盖标签……"
+
+msgid "Add or replace override tags on all selected lines"
+msgstr "为所有选中的字幕行添加或替换覆盖标签"
+
+msgid "Batch Remove Override Tags"
+msgstr "批量移除覆盖标签"
+
+msgid "Batch Remove Override Tags..."
+msgstr "批量移除覆盖标签……"
+
+msgid "Remove named override tags from all selected lines"
+msgstr "从所有选中的字幕行中移除指定覆盖标签"
+
 #: ../src/aegisublocale.cpp:113 ../src/command/app.cpp:156
 msgid "Language"
 msgstr "语言"
@@ -1497,6 +1777,26 @@ msgstr "按样式名称排序所有行"
 #: ../src/command/grid.cpp:242
 msgid "Sort selected subtitles by their style names"
 msgstr "按样式名称排序所选行"
+
+#: ../src/command/grid.cpp
+msgid "Sort all subtitles by their characters per second"
+msgstr "按字/秒升序排序所有行"
+
+#: ../src/command/grid.cpp
+msgid "Sort selected subtitles by their characters per second"
+msgstr "按字/秒升序排序所选行"
+
+#: ../src/command/grid.cpp
+msgid "Text Length"
+msgstr "文本长度"
+
+#: ../src/command/grid.cpp
+msgid "Sort all subtitles by their text length"
+msgstr "按文本长度升序排序所有行"
+
+#: ../src/command/grid.cpp
+msgid "Sort selected subtitles by their text length"
+msgstr "按文本长度升序排序所选行"
 
 #: ../src/command/grid.cpp:253 ../src/command/grid.cpp:254
 msgid "Cycle Tag Hiding Mode"
@@ -4086,7 +4386,7 @@ msgstr "设为选中(&L)"
 #, c-format
 msgid "Selection was set to one line"
 msgid_plural "Selection was set to %u lines"
-msgstr[0] "设为 %u 行选中"
+msgstr[0] "已将选择设为 %u 行"
 
 #: ../src/dialog_selection.cpp:216
 msgid "Selection was set to no lines"
@@ -4096,7 +4396,7 @@ msgstr "设为 0 行选中"
 #, c-format
 msgid "One line was added to selection"
 msgid_plural "%u lines were added to selection"
-msgstr[0] "加入 %u 行选中"
+msgstr[0] "已将 %u 行添加到选择中"
 
 #: ../src/dialog_selection.cpp:223
 msgid "No lines were added to selection"
@@ -4106,7 +4406,7 @@ msgstr "加入 0 行选中"
 #, c-format
 msgid "One line was removed from selection"
 msgid_plural "%u lines were removed from selection"
-msgstr[0] "取消 %u 行选中"
+msgstr[0] "已从选择中移除 %u 行"
 
 #: ../src/dialog_selection.cpp:235
 msgid "No lines were removed from selection"
@@ -4576,7 +4876,7 @@ msgstr "无法解析样式"
 #, c-format
 msgid "Are you sure you want to delete this style?"
 msgid_plural "Are you sure you want to delete these %d styles?"
-msgstr[0] "您确定要删除这 %d 个样式?"
+msgstr[0] "确定要删除这 %d 个样式吗？"
 
 #: ../src/dialog_style_manager.cpp:273
 msgid "Catalog of available storages"
@@ -5084,7 +5384,7 @@ msgstr "分辨率:"
 #, c-format
 msgid "%d frame (%s)"
 msgid_plural "%d frames (%s)"
-msgstr[0] "%d 帧 (%s)"
+msgstr[0] "%d 帧（%s）"
 
 #: ../src/dialog_video_details.cpp:66
 msgid "Length:"
@@ -5515,7 +5815,7 @@ msgstr "所有字体已找到。\n"
 #, c-format
 msgid "One font could not be found\n"
 msgid_plural "%d fonts could not be found.\n"
-msgstr[0] "有 %d 个字体无法找到。\n"
+msgstr[0] "找不到 %d 种字体。\n"
 
 #: ../src/font_file_lister.cpp:239
 #, c-format
@@ -6715,7 +7015,7 @@ msgstr "替换"
 #, c-format
 msgid "One match was replaced."
 msgid_plural "%d matches were replaced."
-msgstr[0] "%d 个匹配项已替换。"
+msgstr[0] "已替换 %d 个匹配项。"
 
 #: ../src/search_replace_engine.cpp:277
 msgid "No matches found."
@@ -7419,7 +7719,7 @@ msgstr "为电影和视频创建和编辑字幕。"
 
 #: ../packages/desktop/aegisub.desktop.in.in:12
 msgid "subtitles;subtitle;captions;captioning;video;audio;"
-msgstr ""
+msgstr "字幕;视频字幕;隐藏字幕;视频;音频;"
 
 #: ../packages/desktop/aegisub.metainfo.xml.in.in:7
 msgid "Create and modify subtitles"
@@ -7504,3 +7804,6 @@ msgstr "音视频"
 #: ../packages/desktop/aegisub.metainfo.xml.in.in:51
 msgid "Audio timing"
 msgstr "音频时轴"
+
+msgid "Playback speed (sound follows; pitch is preserved at other speeds)"
+msgstr "播放倍速（声音随画面同步变速，且保持音调不变；仅极少数不支持变速的播放器会自动静音）"

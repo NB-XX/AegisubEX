@@ -29,22 +29,27 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 #include <wx/dialog.h>
 
 class AssStyle;
 class AssStyleStorage;
+class ColourButton;
 class PersistLocation;
 class SubtitlesPreview;
+class wxBoxSizer;
+class wxButton;
 class wxArrayString;
 class wxCheckBox;
-class wxChildFocusEvent;
 class wxComboBox;
 class wxCommandEvent;
 class wxRadioBox;
 class wxSpinCtrl;
+class wxSpinCtrlDouble;
 class wxTextCtrl;
 class wxThreadEvent;
 class wxWindow;
+class wxPanel;
 namespace agi { struct Context; struct Color; }
 template<typename T> class ValueEvent;
 
@@ -75,6 +80,15 @@ class DialogStyleEditor final : public wxDialog {
 	wxCheckBox *BoxItalic;
 	wxCheckBox *BoxUnderline;
 	wxCheckBox *BoxStrikeout;
+	wxCheckBox *EnableGlow;
+	wxSpinCtrlDouble *GlowWidth;
+	wxSpinCtrlDouble *GlowBlur;
+	ColourButton *GlowColor;
+	wxSpinCtrl *FadeInMs;
+	wxSpinCtrl *FadeOutMs;
+	wxBoxSizer *StrokeRowsSizer;
+	wxButton *AddStrokeButton;
+	std::vector<wxPanel *> stroke_row_panels;
 	wxSpinCtrl *margin[3];
 	wxRadioBox *Alignment;
 	wxComboBox *OutlineType;
@@ -88,8 +102,8 @@ class DialogStyleEditor final : public wxDialog {
 	int BorderStyleToControl(int n);
 	int ControlToBorderStyle(int n);
 	void UpdateWorkStyle();
+	void RebuildStrokeControls(bool append = false);
 
-	void OnChildFocus(wxChildFocusEvent &event);
 	void OnCommandPreviewUpdate(wxCommandEvent &event);
 
 	void OnPreviewTextChange(wxCommandEvent &event);

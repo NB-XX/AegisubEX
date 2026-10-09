@@ -19,6 +19,7 @@
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
 #include "../project.h"
+#include "../selection_controller.h"
 #include "../video_display.h"
 #include "../visual_tool_clip.h"
 #include "../visual_tool_cross.h"
@@ -26,6 +27,7 @@
 #include "../visual_tool_rotatexy.h"
 #include "../visual_tool_rotatez.h"
 #include "../visual_tool_scale.h"
+#include "../visual_tool_timing_region.h"
 #include "../visual_tool_vector_clip.h"
 
 
@@ -115,6 +117,35 @@ namespace {
 		STR_HELP("Clip subtitles to a rectangle")
 	};
 
+	struct visual_mode_timing_region final : public visual_tool_command<VisualToolTimingRegion> {
+		CMD_NAME("video/tool/frame_match")
+		CMD_ICON(frame_match)
+		STR_MENU("Frame Match Assistant")
+		STR_DISP("Frame Match")
+		STR_HELP("Pick a tight box around the full source subtitle on a frame where it is visible")
+
+		void operator()(agi::Context *c) override {
+			if (c->videoDisplay->ToolIsType(typeid(VisualToolTimingRegion)))
+				c->videoDisplay->SetTool(std::make_unique<VisualToolCross>(c->videoDisplay, c));
+			else
+				c->videoDisplay->SetTool(std::make_unique<VisualToolTimingRegion>(c->videoDisplay, c));
+		}
+	};
+
+	struct batch_frame_match final : public Command {
+		CMD_NAME("video/tool/frame_match_batch")
+		CMD_ICON(frame_match)
+		CMD_TYPE(COMMAND_VALIDATE)
+		STR_MENU("Batch Frame Match")
+		STR_DISP("Batch Frame Match")
+		STR_HELP("Match selected subtitle rows using the last picked subtitle region")
+
+		bool Validate(const agi::Context *c) override {
+			return c->project->VideoProvider() && !c->selectionController->GetSelectedSet().empty();
+		}
+		void operator()(agi::Context *c) override { VisualToolTimingRegion::BatchMatchSelection(c); }
+	};
+
 	struct visual_mode_vector_clip final : public visual_tool_command<VisualToolVectorClip> {
 		CMD_NAME("video/tool/vector_clip")
 		CMD_ICON(visual_vector_clip)
@@ -192,6 +223,8 @@ namespace cmd {
 		reg(std::make_unique<visual_mode_rotate_xy>());
 		reg(std::make_unique<visual_mode_scale>());
 		reg(std::make_unique<visual_mode_clip>());
+		reg(std::make_unique<visual_mode_timing_region>());
+		reg(std::make_unique<batch_frame_match>());
 		reg(std::make_unique<visual_mode_vector_clip>());
 
 		reg(std::make_unique<visual_mode_vclip_drag>());

@@ -28,6 +28,7 @@
 class AssDialogue;
 class VideoDisplay;
 class wxMouseCaptureLostEvent;
+class wxKeyEvent;
 class wxMouseEvent;
 class wxToolBar;
 namespace agi {
@@ -142,6 +143,7 @@ public:
 
 	// Stuff called by VideoDisplay
 	virtual void OnMouseEvent(wxMouseEvent &event)=0;
+	virtual bool OnKeyDown(wxKeyEvent &) { return false; }
 	virtual void Draw()=0;
 	// Called by VideoDisplay to set the canvas size in GL coordinates (i.e. logical wx coordinates)
 	virtual void SetCanvasSize(int w, int h);

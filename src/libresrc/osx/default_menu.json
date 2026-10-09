@@ -64,7 +64,9 @@
         { "submenu" : "main/subtitle/sort lines", "text" : "Sort All Lines" },
         { "submenu" : "main/subtitle/sort selected lines", "text" : "Sort Selected Lines" },
         { "command" : "grid/swap" },
-        { "command" : "tool/line/select" }
+        { "command" : "tool/line/select" },
+        {},
+        { "submenu" : "main/subtitle/batch tags", "text" : "Batch Override Tags" }
     ],
     "main/window" : [
         { "command" : "app/minimize" },

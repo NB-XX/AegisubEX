@@ -6,3 +6,6 @@ build*/
 !/subprojects/csri
 !/subprojects/iconv
 !/subprojects/luabins
+
+# Local test assets
+素材/

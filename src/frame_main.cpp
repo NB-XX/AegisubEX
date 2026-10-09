@@ -163,6 +163,9 @@ FrameMain::FrameMain()
 }
 
 FrameMain::~FrameMain () {
+	// Restore the provider's normal subtitle source before either it or the
+	// controls which observe playback are torn down.
+	context->videoController->Stop();
 	context->project->CloseAudio();
 	context->project->CloseVideo();
 

@@ -206,6 +206,10 @@ public:
 	static bool CompEffect(AssDialogue const& lft, AssDialogue const& rgt);
 	/// Compare based on layer
 	static bool CompLayer(AssDialogue const& lft, AssDialogue const& rgt);
+	/// Compare based on characters per second
+	static bool CompCPS(AssDialogue const& lft, AssDialogue const& rgt);
+	/// Compare based on dialogue text length
+	static bool CompTextLength(AssDialogue const& lft, AssDialogue const& rgt);
 
 	/// @brief Sort the dialogue lines in this file
 	/// @param comp Comparison function to use. Defaults to sorting by start time.

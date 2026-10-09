@@ -45,6 +45,8 @@
         { "command" : "tool/style/manager" },
         { "command" : "tool/style/assistant" },
         { "command" : "tool/translation_assistant" },
+        { "command" : "ai/frame_translate" },
+        { "command" : "ai/audio_translate" },
         { "command" : "tool/resampleres" },
         { "command" : "subtitle/spellcheck" },
         {},
@@ -62,6 +64,8 @@
         { "submenu" : "main/subtitle/sort selected lines", "text" : "Sort Selected Lines" },
         { "command" : "grid/swap" },
         { "command" : "tool/line/select" },
-        { "command" : "subtitle/select/all" }
+        { "command" : "subtitle/select/all" },
+        {},
+        { "submenu" : "main/subtitle/batch tags", "text" : "Batch Override Tags" }
     ]
 }

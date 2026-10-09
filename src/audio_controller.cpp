@@ -100,6 +100,16 @@ void AudioController::OnAudioPlayerChanged()
 	try
 	{
 		player = AudioPlayerFactory::GetAudioPlayer(provider, context->parent);
+
+		// A fresh player starts at normal speed. If the video toolbar's
+		// speed picker currently shows another rate, adopt it now so
+		// previews started from the audio box match it even before the
+		// next video playback (which would otherwise re-sync the speed).
+		if (player) {
+			double const speed = std::clamp<int64_t>(OPT_GET("Tool/Playback/Play Speed")->GetInt(), 25, 400) / 100.0;
+			if (speed != 1.0)
+				player->SetSpeed(speed);
+		}
 	}
 	catch (...)
 	{
@@ -212,6 +222,13 @@ void AudioController::SetVolume(double volume)
 {
 	if (!player) return;
 	player->SetVolume(volume);
+}
+
+double AudioController::SetSpeed(double speed)
+{
+	// With no audio open there is no sound to drift, so report success
+	if (!player) return speed;
+	return player->SetSpeed(speed);
 }
 
 int64_t AudioController::SamplesFromMilliseconds(int64_t ms) const

@@ -48,6 +48,7 @@
 #include <libaegisub/util.h>
 
 #include <algorithm>
+#include <limits>
 
 #include <wx/dcbuffer.h>
 #include <wx/menu.h>
@@ -91,6 +92,7 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 
 		context->selectionController->AddActiveLineListener(&BaseGrid::OnActiveLineChanged, this),
 		context->selectionController->AddSelectionListener([&]{ Refresh(false); }),
+		context->videoController->AddReviewModeListener(&BaseGrid::OnReviewModeChanged, this),
 
 		OPT_SUB("Subtitle/Grid/Font Face", &BaseGrid::UpdateStyle, this),
 		OPT_SUB("Subtitle/Grid/Font Size", &BaseGrid::UpdateStyle, this),
@@ -135,6 +137,8 @@ void BaseGrid::OnDPIChanged(wxDPIChangedEvent &e) {
 void BaseGrid::OnSubtitlesCommit(int type) {
 	if (type == AssFile::COMMIT_NEW || type & AssFile::COMMIT_ORDER || type & AssFile::COMMIT_DIAG_ADDREM)
 		UpdateMaps();
+	else if (type & AssFile::COMMIT_DIAG_TIME)
+		UpdateOverlapRows();
 
 	if (type & AssFile::COMMIT_DIAG_META) {
 		SetColumnWidths();
@@ -191,6 +195,9 @@ void BaseGrid::UpdateStyle() {
 	row_colors.Visible.SetColour(to_wx(OPT_GET("Colour/Subtitle Grid/Background/Inframe")->GetColor()));
 	row_colors.SelectedComment.SetColour(to_wx(OPT_GET("Colour/Subtitle Grid/Background/Selected Comment")->GetColor()));
 	row_colors.LeftCol.SetColour(to_wx(OPT_GET("Colour/Subtitle Grid/Left Column")->GetColor()));
+	row_colors.Playback.SetColour(wxColour(255, 222, 150));
+	row_colors.Overlap.SetColour(wxColour(255, 218, 222));
+	row_colors.OverlapSelected.SetColour(wxColour(232, 133, 140));
 
 	if (width_helper)
 		width_helper->ClearCache();
@@ -206,10 +213,39 @@ void BaseGrid::UpdateMaps() {
 
 	for (auto& curdiag : context->ass->Events)
 		index_line_map.push_back(&curdiag);
+	UpdateOverlapRows();
 
 	SetColumnWidths();
 	AdjustScrollbar();
 	Refresh(false);
+}
+
+void BaseGrid::UpdateOverlapRows() {
+	overlap_rows.assign(index_line_map.size(), false);
+	std::vector<int> timed_rows;
+	timed_rows.reserve(index_line_map.size());
+	for (size_t i = 0; i < index_line_map.size(); ++i) {
+		auto line = index_line_map[i];
+		if (!line->Comment && line->End > line->Start)
+			timed_rows.push_back(static_cast<int>(i));
+	}
+	std::sort(timed_rows.begin(), timed_rows.end(), [&](int a, int b) {
+		if (index_line_map[a]->Start != index_line_map[b]->Start)
+			return index_line_map[a]->Start < index_line_map[b]->Start;
+		return index_line_map[a]->End < index_line_map[b]->End;
+	});
+
+	int max_end = std::numeric_limits<int>::min();
+	for (size_t i = 0; i < timed_rows.size(); ++i) {
+		int row = timed_rows[i];
+		auto line = index_line_map[row];
+		int line_start = line->Start;
+		int line_end = line->End;
+		bool overlaps_earlier = max_end > line_start;
+		bool overlaps_later = i + 1 < timed_rows.size() && static_cast<int>(index_line_map[timed_rows[i + 1]]->Start) < line_end;
+		overlap_rows[row] = overlaps_earlier || overlaps_later;
+		max_end = std::max(max_end, line_end);
+	}
 }
 
 void BaseGrid::OnActiveLineChanged(AssDialogue *new_active) {
@@ -254,6 +290,19 @@ void BaseGrid::SelectRow(int row, bool addToSelected, bool select) {
 }
 
 void BaseGrid::OnSeek() {
+	int new_playback_row = -1;
+	if (review_mode && context->project->VideoProvider()) {
+		int time = context->videoController->TimeAtFrame(context->videoController->GetFrameN(), agi::vfr::EXACT);
+		for (size_t i = 0; i < index_line_map.size(); ++i) {
+			auto line = index_line_map[i];
+			if (!line->Comment && line->Start <= time && time < line->End) {
+				new_playback_row = static_cast<int>(i);
+				break;
+			}
+		}
+	}
+	bool playback_changed = new_playback_row != playback_row;
+	playback_row = new_playback_row;
 	int lines = GetClientSize().GetHeight() / lineHeight + 1;
 	lines = mid(0, lines, GetRows() - yPos);
 
@@ -267,8 +316,22 @@ void BaseGrid::OnSeek() {
 			++it;
 		}
 	}
-	if (it != end(visible_rows))
+	if (it != end(visible_rows) || playback_changed)
 		Refresh(false);
+}
+
+void BaseGrid::OnReviewModeChanged(bool active) {
+	review_mode = active;
+	if (!active) overlap_highlight = false;
+	if (!active) playback_row = -1;
+	else OnSeek();
+	Refresh(false);
+}
+
+void BaseGrid::SetOverlapHighlight(bool enabled) {
+	if (!review_mode || overlap_highlight == enabled) return;
+	overlap_highlight = enabled;
+	Refresh(false);
 }
 
 void BaseGrid::OnPaint(wxPaintEvent &) {
@@ -352,6 +415,15 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 
 	const auto active_line = context->selectionController->GetActiveLine();
 	auto const& selection = context->selectionController->GetSelectedSet();
+	bool active_line_overlaps = false;
+	if (overlap_highlight && active_line && !active_line->Comment && active_line->End > active_line->Start) {
+		for (auto line : index_line_map) {
+			if (line != active_line && !line->Comment && line->End > line->Start && active_line->CollidesWith(line)) {
+				active_line_overlaps = true;
+				break;
+			}
+		}
+	}
 	visible_rows.clear();
 
 	for (int i : agi::util::range(nDraw)) {
@@ -363,8 +435,16 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 			color = row_colors.SelectedComment;
 		else if (inSel)
 			color = row_colors.Selection;
+		else if (review_mode && playback_row == i + yPos)
+			color = row_colors.Playback;
 		else if (curDiag->Comment)
 			color = row_colors.Comment;
+
+		bool collision_row = overlap_highlight && static_cast<size_t>(i + yPos) < overlap_rows.size() && overlap_rows[i + yPos];
+		if (collision_row)
+			color = row_colors.Overlap;
+		if (active_line_overlaps && !curDiag->Comment && (curDiag == active_line || active_line->CollidesWith(curDiag)))
+			color = row_colors.OverlapSelected;
 
 		if (OPT_GET("Subtitle/Grid/Highlight Subtitles in Frame")->GetBool() && IsDisplayed(curDiag)) {
 			if (color == row_colors.Default)
@@ -393,6 +473,11 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 			if (paint_columns[j])
 				columns[j]->Paint(dc, x, y, curDiag, context);
 			x += columns[j]->Width();
+		}
+		if (review_mode && playback_row == i + yPos) {
+			dc.SetBrush(*wxTRANSPARENT_BRUSH);
+			dc.SetPen(wxPen(wxColour(230, 135, 20), 2));
+			dc.DrawRectangle(grid_x + 1, y + 1, std::max(0, w - grid_x - 2), lineHeight - 1);
 		}
 
 		// Draw grid

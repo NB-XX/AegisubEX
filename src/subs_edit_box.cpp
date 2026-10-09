@@ -36,6 +36,7 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "audio_box.h"
 #include "base_grid.h"
 #include "command/command.h"
 #include "compat.h"
@@ -53,6 +54,7 @@
 #include "timeedit_ctrl.h"
 #include "utils.h"
 #include "validators.h"
+#include "video_controller.h"
 
 #include <libaegisub/character_count.h>
 #include <libaegisub/util.h>
@@ -105,6 +107,7 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 : wxPanel(parent, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxRAISED_BORDER, "SubsEditBox")
 , c(context)
 , undo_timer(GetEventHandler())
+, focus_timer(GetEventHandler())
 {
 	using std::bind;
 
@@ -226,7 +229,8 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 
 	Bind(wxEVT_CHAR_HOOK, &SubsEditBox::OnKeyDown, this);
 	Bind(wxEVT_SIZE, &SubsEditBox::OnSize, this);
-	Bind(wxEVT_TIMER, [this](wxTimerEvent&) { commit_id = -1; });
+	Bind(wxEVT_TIMER, [this](wxTimerEvent&) { commit_id = -1; }, undo_timer.GetId());
+	Bind(wxEVT_TIMER, &SubsEditBox::OnFocusPoll, this, focus_timer.GetId());
 
 	wxSizeEvent evt;
 	OnSize(evt);
@@ -236,6 +240,7 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 		context->project->AddTimecodesListener(&SubsEditBox::UpdateFrameTiming, this),
 		context->selectionController->AddActiveLineListener(&SubsEditBox::OnActiveLineChanged, this),
 		context->selectionController->AddSelectionListener(&SubsEditBox::OnSelectedSetChanged, this),
+		context->videoController->AddReviewModeListener(&SubsEditBox::OnReviewModeChanged, this),
 		context->initialLineState->AddChangeListener(&SubsEditBox::OnLineInitialTextChanged, this),
 	 });
 
@@ -409,6 +414,39 @@ void SubsEditBox::OnActiveLineChanged(AssDialogue *new_line) {
 	commit_id = -1;
 
 	UpdateFields(AssFile::COMMIT_DIAG_FULL, false);
+}
+
+void SubsEditBox::OnReviewModeChanged(bool active) {
+	review_mode = active;
+	SetControlsState(!!line);
+	if (active) {
+		focus_timer.Start(120);
+		c->videoController->OnEditAreaFocus(IsFocusInEditArea());
+	}
+	else {
+		focus_timer.Stop();
+		c->videoController->OnEditAreaFocus(false);
+	}
+}
+
+/// Review-mode focus watchdog: while review mode is on, periodically check
+/// whether the keyboard focus is inside an editing area (this box or the
+/// audio display) and let the video controller pause/resume accordingly.
+/// Polling FindFocus() is far more reliable than SET/KILL_FOCUS events, which
+/// Scintilla and some native controls swallow without propagating.
+void SubsEditBox::OnFocusPoll(wxTimerEvent &) {
+	if (review_mode)
+		c->videoController->OnEditAreaFocus(IsFocusInEditArea());
+}
+
+bool SubsEditBox::IsFocusInEditArea() const {
+	wxWindow *focus = wxWindow::FindFocus();
+	if (!focus)
+		return false;
+	for (wxWindow *w = focus; w; w = w->GetParent())
+		if (w == this || w == c->audioBox)
+			return true;
+	return false;
 }
 
 void SubsEditBox::OnSelectedSetChanged() {
