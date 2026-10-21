@@ -194,7 +194,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	wxWindow *ColorsSizerBox = ColorsSizer->GetStaticBox();
 	wxWindow *MarginSizerBox = MarginSizer->GetStaticBox();
 	wxWindow *OutlineSizerBox = OutlineSizer->GetStaticBox();
-	wxWindow *EffectsSizerBox = EffectsSizer->GetStaticBox();
+	EffectsSizerBox = EffectsSizer->GetStaticBox();
 	wxWindow *MiscSizerBox = MiscSizer->GetStaticBox();
 	wxWindow *PreviewSizerBox = PreviewSizer->GetStaticBox();
 
@@ -344,13 +344,21 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	EffectsSizer->Add(new wxStaticText(EffectsSizerBox, -1, _("Additional outline layers")), wxSizerFlags().Border(wxBOTTOM));
 	EffectsSizer->Add(StrokeRowsSizer, wxSizerFlags().Expand().Border(wxBOTTOM));
 	EffectsSizer->Add(AddStrokeButton, wxSizerFlags().Border(wxBOTTOM));
-	add_with_label(EffectsSizerBox, EffectsSizer, _("Fade in (ms):"), FadeInMs);
-	add_with_label(EffectsSizerBox, EffectsSizer, _("Fade out (ms):"), FadeOutMs);
-	EffectsSizer->Add(new wxStaticLine(EffectsSizerBox), wxSizerFlags().Expand().Border(wxTOP | wxBOTTOM));
-	EffectsSizer->Add(EnableGlow, wxSizerFlags().Border(wxBOTTOM));
-	add_with_label(EffectsSizerBox, EffectsSizer, _("Glow color:"), GlowColor);
-	add_with_label(EffectsSizerBox, EffectsSizer, _("Glow width:"), GlowWidth);
-	add_with_label(EffectsSizerBox, EffectsSizer, _("Glow blur:"), GlowBlur);
+
+	auto add_fx_row = [&](wxString const& label, wxWindow *ctrl) {
+		auto row = new wxBoxSizer(wxHORIZONTAL);
+		row->Add(new wxStaticText(EffectsSizerBox, -1, label), wxSizerFlags().Center().Border(wxRIGHT, 5));
+		row->Add(ctrl, wxSizerFlags().Left());
+		EffectsSizer->Add(row, wxSizerFlags().Border(wxBOTTOM, 5));
+	};
+
+	add_fx_row(_("Fade in (ms):"), FadeInMs);
+	add_fx_row(_("Fade out (ms):"), FadeOutMs);
+	EffectsSizer->Add(new wxStaticLine(EffectsSizerBox), wxSizerFlags().Expand().Border(wxTOP | wxBOTTOM, 5));
+	EffectsSizer->Add(EnableGlow, wxSizerFlags().Border(wxBOTTOM, 5));
+	add_fx_row(_("Glow color:"), GlowColor);
+	add_fx_row(_("Glow width:"), GlowWidth);
+	add_fx_row(_("Glow blur:"), GlowBlur);
 
 	// Misc
 	auto MiscBoxTop = new wxFlexGridSizer(2, 4, 5, 5);
@@ -558,7 +566,7 @@ void DialogStyleEditor::RebuildStrokeControls(bool append) {
 		stroke_row_panels.clear();
 	}
 
-	auto parent = StrokeRowsSizer->GetContainingWindow();
+	auto parent = EffectsSizerBox ? EffectsSizerBox : this;
 	for (size_t i = stroke_row_panels.size(); i < work->strokes.size(); ++i) {
 		auto panel = new wxPanel(parent);
 		auto row = new wxBoxSizer(wxHORIZONTAL);
