@@ -357,12 +357,14 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 
 void Project::LoadAudio(agi::fs::path path) {
 	DoLoadAudio(path, false);
+	context->ass->Commit(_("load audio"), AssFile::COMMIT_SCRIPTINFO);
 }
 
 void Project::CloseAudio() {
 	AnnounceAudioProviderModified(nullptr);
 	audio_provider.reset();
 	SetPath(audio_file, "?audio", "", "");
+	context->ass->Commit(_("close audio"), AssFile::COMMIT_SCRIPTINFO);
 }
 
 bool Project::DoLoadVideo(agi::fs::path const& path) {
@@ -420,6 +422,7 @@ void Project::LoadVideo(agi::fs::path path) {
 	else
 		context->videoController->SetAspectRatio(AspectRatio::Default);
 	context->videoController->JumpToFrame(0);
+	context->ass->Commit(_("load video"), AssFile::COMMIT_SCRIPTINFO);
 }
 
 void Project::CloseVideo() {
@@ -430,6 +433,7 @@ void Project::CloseVideo() {
 	context->ass->Properties.ar_mode = 0;
 	context->ass->Properties.ar_value = 0.0;
 	context->ass->Properties.video_position = 0;
+	context->ass->Commit(_("close video"), AssFile::COMMIT_SCRIPTINFO);
 }
 
 void Project::DoLoadTimecodes(agi::fs::path const& path) {

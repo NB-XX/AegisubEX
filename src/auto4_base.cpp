@@ -259,6 +259,11 @@ namespace Automation4 {
 		std::string include_paths = OPT_GET("Path/Automation/Include")->GetString();
 		for (auto tok : agi::Split(include_paths, '|')) {
 			auto path = config::path->Decode(std::string(tok));
+			if (!agi::fs::DirectoryExists(path) && std::string_view(tok).starts_with("?data/")) {
+				auto fallback = config::path->Decode("?data/../" + std::string(tok.substr(6)));
+				if (agi::fs::DirectoryExists(fallback))
+					path = fallback;
+			}
 			if (path.is_absolute() && agi::fs::DirectoryExists(path))
 				include_path.emplace_back(std::move(path));
 		}
@@ -320,7 +325,22 @@ namespace Automation4 {
 		std::set<agi::fs::path> dirnames;
 		for (auto tok : agi::Split(path, '|')) {
 			auto dirname = config::path->Decode(std::string(tok));
-			if (!agi::fs::DirectoryExists(dirname)) continue;
+			if (!agi::fs::DirectoryExists(dirname)) {
+				if (std::string_view(tok).starts_with("?data/")) {
+					auto fallback = config::path->Decode("?data/../" + std::string(tok.substr(6)));
+					if (agi::fs::DirectoryExists(fallback))
+						dirname = fallback;
+					else
+						continue;
+				}
+				else if (std::string_view(tok).starts_with("?user/")) {
+					try { agi::fs::CreateDirectory(dirname); } catch (...) {}
+					continue;
+				}
+				else {
+					continue;
+				}
+			}
 
 			if (dirnames.count(dirname)) continue;
 			dirnames.insert(dirname);

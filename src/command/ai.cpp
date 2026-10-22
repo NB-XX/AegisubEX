@@ -2,6 +2,7 @@
 
 #include "command.h"
 
+#include "../compat.h"
 #include "../ai_assistant.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
@@ -17,9 +18,9 @@ namespace {
 		CMD_NAME("ai/frame_translate")
 		CMD_ICON(visual_clip)
 		CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
-		STR_MENU("视频截图翻译")
-		STR_DISP("截图翻译")
-		STR_HELP("在视频画面上框选字幕区域，直接截图并调用 AI 大模型识别与翻译")
+		wxString StrMenu(const agi::Context *) const override { return to_wx("视频截图翻译"); }
+		wxString StrDisplay(const agi::Context *) const override { return to_wx("截图翻译"); }
+		wxString StrHelp() const override { return to_wx("在视频画面上框选字幕区域，直接截图并调用 AI 大模型识别与翻译"); }
 
 		bool Validate(const agi::Context *c) override {
 			return !!c->project->VideoProvider();
@@ -48,9 +49,9 @@ namespace {
 		CMD_NAME("ai/audio_translate")
 		CMD_ICON(toggle_audio_spectrum)
 		CMD_TYPE(COMMAND_VALIDATE)
-		STR_MENU("音频翻译选中行")
-		STR_DISP("音频翻译")
-		STR_HELP("按选中行时间轴切取音频，调用百炼 omni 模型转写并翻译，可一键替换选中行")
+		wxString StrMenu(const agi::Context *) const override { return to_wx("音频翻译选中行"); }
+		wxString StrDisplay(const agi::Context *) const override { return to_wx("音频翻译"); }
+		wxString StrHelp() const override { return to_wx("按选中行时间轴切取音频，调用百炼 omni 模型转写并翻译，可一键替换选中行"); }
 
 		bool Validate(const agi::Context *c) override {
 			return !!c->project->AudioProvider()
