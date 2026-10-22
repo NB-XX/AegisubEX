@@ -46,6 +46,8 @@
         "tool/style/manager",
         "video/tool/frame_match",
         "video/tool/frame_match_batch",
+        "ai/frame_translate",
+        "ai/audio_translate",
         "review/mode",
         "subtitle/properties",
         "subtitle/attachment",

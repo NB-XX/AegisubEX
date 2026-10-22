@@ -34,6 +34,7 @@ class BaseGrid;
 class TextSelectionController;
 class VideoController;
 class VideoDisplay;
+class AIResultPanel;
 class wxWindow;
 namespace Automation4 { class ScriptManager; }
 
@@ -67,6 +68,7 @@ struct Context {
 	std::unique_ptr<DialogManager> dialog;
 	FrameMain *frame = nullptr;
 	VideoDisplay *videoDisplay = nullptr;
+	AIResultPanel *aiPanel = nullptr;
 
 	Context();
 	~Context();

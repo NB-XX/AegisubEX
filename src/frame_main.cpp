@@ -43,6 +43,7 @@
 #include "audio_controller.h"
 #include "audio_box.h"
 #include "base_grid.h"
+#include "ai_assistant.h"
 #include "compat.h"
 #include "command/command.h"
 #include "dialog_detached_video.h"
@@ -163,6 +164,7 @@ FrameMain::FrameMain()
 }
 
 FrameMain::~FrameMain () {
+	context->aiPanel = nullptr;
 	// Restore the provider's normal subtitle source before either it or the
 	// controls which observe playback are torn down.
 	context->videoController->Stop();
@@ -202,6 +204,11 @@ void FrameMain::InitContents() {
 	StartupLog("Create subtitle editing box");
 	auto EditBox = new SubsEditBox(Panel, context.get());
 
+	StartupLog("Create AI result panel");
+	aiPanel = new AIResultPanel(Panel, context.get());
+	context->aiPanel = aiPanel;
+	aiPanel->Show(false);
+
 	StartupLog("Arrange main sizers");
 	ToolsSizer = new wxBoxSizer(wxVERTICAL);
 	ToolsSizer->Add(audioBox, 0, wxEXPAND);
@@ -209,10 +216,13 @@ void FrameMain::InitContents() {
 	TopSizer = new wxBoxSizer(wxHORIZONTAL);
 	TopSizer->Add(videoBox, 0, wxEXPAND, 0);
 	TopSizer->Add(ToolsSizer, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 5);
+	BottomSizer = new wxBoxSizer(wxHORIZONTAL);
+	BottomSizer->Add(context->subsGrid, 1, wxEXPAND, 0);
+	BottomSizer->Add(aiPanel, 0, wxEXPAND | wxLEFT, 4);
 	MainSizer = new wxBoxSizer(wxVERTICAL);
 	MainSizer->Add(new wxStaticLine(Panel),0,wxEXPAND,0);
 	MainSizer->Add(TopSizer,0,wxEXPAND,0);
-	MainSizer->Add(context->subsGrid,1,wxEXPAND,0);
+	MainSizer->Add(BottomSizer,1,wxEXPAND,0);
 	Panel->SetSizer(MainSizer);
 
 	StartupLog("Perform layout");

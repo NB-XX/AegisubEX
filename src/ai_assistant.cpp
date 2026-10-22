@@ -1,9 +1,7 @@
 // AI 辅助翻译内嵌实现：
-//   功能1：对视频当前画面的指定区域截图，调用百炼 qwen 视觉模型识别并翻译；
-//   功能2：按选中行时间轴切取音频（内存中重采样为 16k 单声道 WAV），
-//          调用百炼 omni 模型转写并翻译。
-// 请求走 libcurl（本构建已链接，Schannel TLS），在后台线程执行、可取消，
-// 结果回填到可编辑文本框，一键写回当前行/选中行（走 Commit，支持撤销）。
+//   功能1：在视频画面上直接框选截图，调用百炼 qwen 视觉模型识别并翻译；
+//   功能2：按选中行时间轴切取音频，调用百炼 omni 模型转写并翻译。
+// 结果在右下角常驻面板展示，可编辑后一键填入/替换当前行或选中行（支持撤销）。
 
 #include "ai_assistant.h"
 
@@ -17,15 +15,20 @@
 #include "project.h"
 #include "selection_controller.h"
 #include "video_controller.h"
+#include "video_display.h"
 #include "video_frame.h"
+#include "visual_tool_cross.h"
 
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/dispatch.h>
 
 #include <wx/button.h>
+#include <wx/checkbox.h>
 #include <wx/filename.h>
 #include <wx/mstream.h>
+#include <wx/notebook.h>
 #include <wx/sizer.h>
+#include <wx/spinctrl.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 #include <wx/utils.h>
@@ -145,7 +148,7 @@ std::string trim_ws(const std::string& s) {
 }
 
 /// 取指定标记（如"译文"）之后的内容，去掉前导 = ： 等分隔符；
-/// 找不到时按 whole_fallback 决定回退为整段或空串。与 Lua 版行为一致。
+/// 找不到时按 whole_fallback 决定回退为整段或空串。
 std::string extract_after(const std::string& text, const char* marker, bool whole_fallback) {
 	size_t pos = text.find(marker);
 	if (pos == std::string::npos)
@@ -276,7 +279,7 @@ std::string build_wav16k(agi::AudioProvider* provider, int64_t s0, int64_t s1) {
 			} else if (!flt && bps == 1) {
 				sum += (static_cast<uint8_t>(raw[off]) - 128) / 128.0f;
 			} else {
-				return ""; // 非常见格式
+				return "";
 			}
 		}
 		mono[static_cast<size_t>(i)] = sum / ch;
@@ -325,473 +328,663 @@ std::string build_wav16k(agi::AudioProvider* provider, int64_t s0, int64_t s1) {
 	return wav;
 }
 
-// ------------------------------------------------------------ 对话框
+// ------------------------------------------------------------ 设置对话框
 
-class AITranslationDialog final : public wxDialog {
-	agi::Context* c;
-	AIMode mode;
-
-	std::shared_ptr<std::atomic<bool>> cancel_ = std::make_shared<std::atomic<bool>>(false);
-	std::shared_ptr<std::atomic<bool>> alive_  = std::make_shared<std::atomic<bool>>(true);
-	bool running_ = false;
-
+class AISettingsDialog final : public wxDialog {
 	wxTextCtrl* api_key_ = nullptr;
-	wxTextCtrl* model_ = nullptr;
-	wxTextCtrl* lang_ = nullptr;
-	wxTextCtrl* region_[4] = {};   // 左上X 左上Y 右下X 右下Y（百分比）
-	wxTextCtrl* pad_[2] = {};      // 头尾补齐 ms
-	wxStaticText* status_ = nullptr;
-	wxButton* run_ = nullptr;
-	wxButton* cancel_btn_ = nullptr;
-	wxButton* apply_ = nullptr;
-	wxTextCtrl* orig_ = nullptr;     // 截图模式：原文
-	wxTextCtrl* trans_ = nullptr;    // 截图模式：译文
-	wxTextCtrl* combined_ = nullptr; // 音频模式：合并结果（可编辑）
-	std::vector<AssDialogue*> audio_lines;
+	wxCheckBox* show_key_ = nullptr;
+	wxTextCtrl* vision_model_ = nullptr;
+	wxTextCtrl* audio_model_ = nullptr;
+	wxTextCtrl* target_lang_ = nullptr;
+	wxSpinCtrl* pad_start_ = nullptr;
+	wxSpinCtrl* pad_end_ = nullptr;
 
-	std::string field(wxTextCtrl* t) const {
-		return from_wx(t->GetValue());
+public:
+	AISettingsDialog(wxWindow* parent)
+	: wxDialog(parent, wxID_ANY, to_wx("AI 辅助翻译设置"),
+		wxDefaultPosition, wxDefaultSize,
+		wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+	{
+		auto* main_sizer = new wxBoxSizer(wxVERTICAL);
+		auto* grid = new wxFlexGridSizer(2, wxSize(8, 6));
+		grid->AddGrowableCol(1, 1);
+
+		auto add_row = [&](const char* label, wxWindow* ctrl) {
+			grid->Add(new wxStaticText(this, wxID_ANY, to_wx(label)), 0, wxALIGN_CENTER_VERTICAL);
+			grid->Add(ctrl, 1, wxEXPAND);
+		};
+		auto add_sizer_row = [&](const char* label, wxSizer* sizer) {
+			grid->Add(new wxStaticText(this, wxID_ANY, to_wx(label)), 0, wxALIGN_CENTER_VERTICAL);
+			grid->Add(sizer, 1, wxEXPAND);
+		};
+
+		std::string key = opt_str("Tool/AI/API Key");
+		if (key.empty()) key = seed_legacy_api_key();
+
+		auto* key_sizer = new wxBoxSizer(wxHORIZONTAL);
+		api_key_ = new wxTextCtrl(this, wxID_ANY, to_wx(key), wxDefaultPosition, wxSize(280, -1), wxTE_PASSWORD);
+		show_key_ = new wxCheckBox(this, wxID_ANY, to_wx("显示密钥"));
+		key_sizer->Add(api_key_, 1, wxEXPAND | wxRIGHT, 6);
+		key_sizer->Add(show_key_, 0, wxALIGN_CENTER_VERTICAL);
+		add_sizer_row("API 密钥：", key_sizer);
+
+		vision_model_ = new wxTextCtrl(this, wxID_ANY, to_wx(opt_str("Tool/AI/Vision Model", "qwen3.8-flash")));
+		add_row("视觉模型：", vision_model_);
+
+		audio_model_ = new wxTextCtrl(this, wxID_ANY, to_wx(opt_str("Tool/AI/Audio Model", "qwen3.8-omni-flash")));
+		add_row("音频模型：", audio_model_);
+
+		target_lang_ = new wxTextCtrl(this, wxID_ANY, to_wx(opt_str("Tool/AI/Target Lang", "简体中文")));
+		add_row("目标语言：", target_lang_);
+
+		auto* pad_sizer = new wxBoxSizer(wxHORIZONTAL);
+		pad_start_ = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(80, -1),
+			wxSP_ARROW_KEYS, 0, 5000, OPT_GET("Tool/AI/Pad Start")->GetInt());
+		pad_end_ = new wxSpinCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(80, -1),
+			wxSP_ARROW_KEYS, 0, 5000, OPT_GET("Tool/AI/Pad End")->GetInt());
+		pad_sizer->Add(new wxStaticText(this, wxID_ANY, to_wx("前补齐(ms)：")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+		pad_sizer->Add(pad_start_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 12);
+		pad_sizer->Add(new wxStaticText(this, wxID_ANY, to_wx("后补齐(ms)：")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+		pad_sizer->Add(pad_end_, 0, wxALIGN_CENTER_VERTICAL);
+		add_sizer_row("音频切取补齐：", pad_sizer);
+
+		main_sizer->Add(grid, 1, wxEXPAND | wxALL, 12);
+		main_sizer->Add(CreateStdDialogButtonSizer(wxOK | wxCANCEL), 0, wxEXPAND | wxALL, 10);
+
+		show_key_->Bind(wxEVT_CHECKBOX, [this, key_sizer](wxCommandEvent& e) {
+			wxString val = api_key_->GetValue();
+			long style = e.IsChecked() ? 0 : wxTE_PASSWORD;
+			auto* p = api_key_->GetParent();
+			api_key_->Destroy();
+			api_key_ = new wxTextCtrl(p, wxID_ANY, val, wxDefaultPosition, wxSize(280, -1), style);
+			key_sizer->Insert(0, api_key_, 1, wxEXPAND | wxRIGHT, 6);
+			key_sizer->Layout();
+		});
+
+		SetSizerAndFit(main_sizer);
+		Centre();
 	}
-	void set_field(wxTextCtrl* t, const std::string& s) {
-		t->ChangeValue(to_wx(s));
+
+	void Save() {
+		OPT_SET("Tool/AI/API Key")->SetString(from_wx(api_key_->GetValue()));
+		OPT_SET("Tool/AI/Vision Model")->SetString(from_wx(vision_model_->GetValue()));
+		OPT_SET("Tool/AI/Audio Model")->SetString(from_wx(audio_model_->GetValue()));
+		OPT_SET("Tool/AI/Target Lang")->SetString(from_wx(target_lang_->GetValue()));
+		OPT_SET("Tool/AI/Pad Start")->SetInt(pad_start_->GetValue());
+		OPT_SET("Tool/AI/Pad End")->SetInt(pad_end_->GetValue());
 	}
-	void status(const std::string& s) {
+};
+
+} // anonymous namespace
+
+// ------------------------------------------------------------ 视觉截图工具
+
+VisualToolAIScreenshot::VisualToolAIScreenshot(VideoDisplay *parent, agi::Context *context)
+: VisualToolBase(parent, context)
+{
+}
+
+void VisualToolAIScreenshot::ClearRegion() {
+	has_region = false;
+	dragging = false;
+	if (parent->HasCapture()) parent->ReleaseMouse();
+}
+
+bool VisualToolAIScreenshot::OnKeyDown(wxKeyEvent &event) {
+	if (event.GetKeyCode() == WXK_ESCAPE) {
+		ClearRegion();
+		parent->Render();
+		c->videoDisplay->SetTool(std::make_unique<VisualToolCross>(c->videoDisplay, c));
+		return true;
+	}
+	return false;
+}
+
+void VisualToolAIScreenshot::OnMouseEvent(wxMouseEvent &event) {
+	mouse_pos = Vector2D(event.GetX(), event.GetY());
+
+	if (event.RightDown()) {
+		if (dragging || has_region) {
+			ClearRegion();
+			parent->Render();
+		} else {
+			c->videoDisplay->SetTool(std::make_unique<VisualToolCross>(c->videoDisplay, c));
+		}
+	}
+	else if (event.LeftDown()) {
+		start = end = ToScriptCoords(mouse_pos);
+		has_region = true;
+		dragging = true;
+		if (!parent->HasCapture()) parent->CaptureMouse();
+		parent->Render();
+	}
+	else if (event.Dragging() && event.LeftIsDown() && dragging) {
+		end = ToScriptCoords(mouse_pos);
+		parent->Render();
+	}
+	else if (event.LeftUp() && dragging) {
+		end = ToScriptCoords(mouse_pos);
+		dragging = false;
+		if (parent->HasCapture()) parent->ReleaseMouse();
+
+		auto provider = c->project->VideoProvider();
+		if (provider && script_res.X() > 0 && script_res.Y() > 0) {
+			int x0 = std::clamp(static_cast<int>(std::floor(std::min(start.X(), end.X()) * provider->GetWidth() / script_res.X())), 0, provider->GetWidth() - 1);
+			int x1 = std::clamp(static_cast<int>(std::ceil(std::max(start.X(), end.X()) * provider->GetWidth() / script_res.X())), 0, provider->GetWidth());
+			int y0 = std::clamp(static_cast<int>(std::floor(std::min(start.Y(), end.Y()) * provider->GetHeight() / script_res.Y())), 0, provider->GetHeight() - 1);
+			int y1 = std::clamp(static_cast<int>(std::ceil(std::max(start.Y(), end.Y()) * provider->GetHeight() / script_res.Y())), 0, provider->GetHeight());
+
+			if (x1 - x0 >= 8 && y1 - y0 >= 8) {
+				OPT_SET("Tool/AI/Region X0")->SetDouble(static_cast<double>(x0) * 100.0 / provider->GetWidth());
+				OPT_SET("Tool/AI/Region Y0")->SetDouble(static_cast<double>(y0) * 100.0 / provider->GetHeight());
+				OPT_SET("Tool/AI/Region X1")->SetDouble(static_cast<double>(x1) * 100.0 / provider->GetWidth());
+				OPT_SET("Tool/AI/Region Y1")->SetDouble(static_cast<double>(y1) * 100.0 / provider->GetHeight());
+
+				RunAIFrameTranslate(c, x0, y0, x1, y1);
+			}
+		}
+		parent->Render();
+	}
+	else if (event.Leaving()) {
+		mouse_pos = Vector2D(-1, -1);
+	}
+	event.Skip(false);
+}
+
+void VisualToolAIScreenshot::Draw() {
+	if (!has_region) return;
+	gl.SetLineColour(wxColour(0, 180, 255), 1.0f, 2);
+	gl.SetFillColour(wxColour(0, 180, 255), 0.22f);
+	gl.DrawRectangle(FromScriptCoords(start), FromScriptCoords(end));
+}
+
+// ------------------------------------------------------------ 常驻右下角面板
+
+AIResultPanel::AIResultPanel(wxWindow* parent, agi::Context* ctx)
+: wxPanel(parent, wxID_ANY)
+, c(ctx)
+{
+	SetMinSize(wxSize(350, -1));
+
+	auto* root = new wxBoxSizer(wxVERTICAL);
+
+	// ---- 顶部栏（标题 + 状态 + 设置 + 关闭）
+	auto* top_row = new wxBoxSizer(wxHORIZONTAL);
+	auto* title = new wxStaticText(this, wxID_ANY, to_wx("AI 辅助翻译"));
+	wxFont font = title->GetFont();
+	font.SetWeight(wxFONTWEIGHT_BOLD);
+	title->SetFont(font);
+	top_row->Add(title, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+
+	status_ = new wxStaticText(this, wxID_ANY, to_wx("就绪"), wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
+	status_->SetForegroundColour(wxColour(110, 110, 110));
+	top_row->Add(status_, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+
+	settings_btn_ = new wxButton(this, wxID_ANY, to_wx("⚙ 设置"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+	close_btn_ = new wxButton(this, wxID_ANY, to_wx("✕"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+	top_row->Add(settings_btn_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+	top_row->Add(close_btn_, 0, wxALIGN_CENTER_VERTICAL);
+	root->Add(top_row, 0, wxEXPAND | wxALL, 6);
+
+	// ---- Tab 切换区
+	notebook_ = new wxNotebook(this, wxID_ANY);
+
+	// Tab 0: 截图翻译
+	auto* frame_page = new wxPanel(notebook_, wxID_ANY);
+	auto* frame_sizer = new wxBoxSizer(wxVERTICAL);
+
+	frame_sizer->Add(new wxStaticText(frame_page, wxID_ANY, to_wx("识别原文：")), 0, wxBOTTOM, 2);
+	frame_orig_ = new wxTextCtrl(frame_page, wxID_ANY, "", wxDefaultPosition, wxSize(-1, 52), wxTE_MULTILINE);
+	frame_sizer->Add(frame_orig_, 0, wxEXPAND | wxBOTTOM, 6);
+
+	frame_sizer->Add(new wxStaticText(frame_page, wxID_ANY, to_wx("翻译结果（可编辑）：")), 0, wxBOTTOM, 2);
+	frame_trans_ = new wxTextCtrl(frame_page, wxID_ANY, "", wxDefaultPosition, wxSize(-1, 72), wxTE_MULTILINE);
+	frame_sizer->Add(frame_trans_, 1, wxEXPAND | wxBOTTOM, 6);
+
+	auto* frame_btn_row = new wxBoxSizer(wxHORIZONTAL);
+	frame_apply_ = new wxButton(frame_page, wxID_ANY, to_wx("填入当前行"));
+	frame_apply_->Disable();
+	frame_resnap_ = new wxButton(frame_page, wxID_ANY, to_wx("重新截图"));
+	frame_retry_ = new wxButton(frame_page, wxID_ANY, to_wx("重试"));
+	cancel_btn_ = new wxButton(frame_page, wxID_ANY, to_wx("取消"));
+	cancel_btn_->Disable();
+
+	frame_btn_row->Add(frame_apply_, 0, wxRIGHT, 4);
+	frame_btn_row->Add(frame_resnap_, 0, wxRIGHT, 4);
+	frame_btn_row->Add(frame_retry_, 0, wxRIGHT, 4);
+	frame_btn_row->Add(cancel_btn_, 0);
+	frame_sizer->Add(frame_btn_row, 0, wxEXPAND);
+
+	frame_page->SetSizer(frame_sizer);
+	notebook_->AddPage(frame_page, to_wx("截图翻译"), true);
+
+	// Tab 1: 音频翻译
+	auto* audio_page = new wxPanel(notebook_, wxID_ANY);
+	auto* audio_sizer = new wxBoxSizer(wxVERTICAL);
+
+	audio_sizer->Add(new wxStaticText(audio_page, wxID_ANY, to_wx("转写与翻译结果（可直接编辑）：")), 0, wxBOTTOM, 2);
+	audio_combined_ = new wxTextCtrl(audio_page, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE);
+	audio_sizer->Add(audio_combined_, 1, wxEXPAND | wxBOTTOM, 6);
+
+	auto* audio_btn_row = new wxBoxSizer(wxHORIZONTAL);
+	audio_apply_ = new wxButton(audio_page, wxID_ANY, to_wx("替换选中行"));
+	audio_apply_->Disable();
+	audio_retry_ = new wxButton(audio_page, wxID_ANY, to_wx("重新翻译"));
+	audio_clear_ = new wxButton(audio_page, wxID_ANY, to_wx("清空"));
+	audio_cancel_btn_ = new wxButton(audio_page, wxID_ANY, to_wx("取消"));
+	audio_cancel_btn_->Disable();
+
+	audio_btn_row->Add(audio_apply_, 0, wxRIGHT, 4);
+	audio_btn_row->Add(audio_retry_, 0, wxRIGHT, 4);
+	audio_btn_row->Add(audio_clear_, 0, wxRIGHT, 4);
+	audio_btn_row->Add(audio_cancel_btn_, 0);
+	audio_sizer->Add(audio_btn_row, 0, wxEXPAND);
+
+	audio_page->SetSizer(audio_sizer);
+	notebook_->AddPage(audio_page, to_wx("音频翻译"), false);
+
+	root->Add(notebook_, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 6);
+	SetSizer(root);
+
+	// 绑定事件
+	frame_apply_->Bind(wxEVT_BUTTON, &AIResultPanel::OnFrameApply, this);
+	frame_resnap_->Bind(wxEVT_BUTTON, &AIResultPanel::OnFrameResnap, this);
+	frame_retry_->Bind(wxEVT_BUTTON, &AIResultPanel::OnFrameRetry, this);
+	cancel_btn_->Bind(wxEVT_BUTTON, &AIResultPanel::OnCancelClick, this);
+
+	audio_apply_->Bind(wxEVT_BUTTON, &AIResultPanel::OnAudioApply, this);
+	audio_retry_->Bind(wxEVT_BUTTON, &AIResultPanel::OnAudioRetry, this);
+	audio_clear_->Bind(wxEVT_BUTTON, &AIResultPanel::OnAudioClear, this);
+	audio_cancel_btn_->Bind(wxEVT_BUTTON, &AIResultPanel::OnCancelClick, this);
+
+	settings_btn_->Bind(wxEVT_BUTTON, &AIResultPanel::OnSettingsClick, this);
+	close_btn_->Bind(wxEVT_BUTTON, &AIResultPanel::OnCloseClick, this);
+}
+
+AIResultPanel::~AIResultPanel() {
+	alive_->store(false);
+	cancel_->store(true);
+}
+
+void AIResultPanel::SelectTab(int tab_idx) {
+	if (notebook_ && tab_idx >= 0 && static_cast<size_t>(tab_idx) < notebook_->GetPageCount())
+		notebook_->SetSelection(tab_idx);
+}
+
+void AIResultPanel::SetStatus(const std::string& s) {
+	if (status_) {
 		status_->SetLabel(to_wx(s));
 		status_->GetParent()->Layout();
 	}
+}
 
-public:
-	AITranslationDialog(agi::Context* ctx, AIMode m)
-	: wxDialog(ctx->parent, wxID_ANY,
-		m == AIMode::Frame ? to_wx("区域截图翻译") : to_wx("音频翻译选中行"),
-		wxDefaultPosition, wxDefaultSize,
-		wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
-	, c(ctx), mode(m)
-	{
-		// ---- 载入配置
-		std::string key = opt_str("Tool/AI/API Key");
-		if (key.empty()) key = seed_legacy_api_key();
-		std::string model = mode == AIMode::Frame
-			? opt_str("Tool/AI/Vision Model", "qwen3.8-flash")
-			: opt_str("Tool/AI/Audio Model", "qwen3.8-omni-flash");
-		std::string lang = opt_str("Tool/AI/Target Lang", "简体中文");
+void AIResultPanel::ShowSettings() {
+	AISettingsDialog dlg(this);
+	if (dlg.ShowModal() == wxID_OK) {
+		dlg.Save();
+		SetStatus("设置已保存");
+	}
+}
 
+void AIResultPanel::BeginJob(const std::string& doing) {
+	running_ = true;
+	cancel_->store(false);
+	cancel_btn_->Enable();
+	audio_cancel_btn_->Enable();
+	frame_apply_->Disable();
+	audio_apply_->Disable();
+	SetStatus(doing);
+}
+
+void AIResultPanel::EndJob() {
+	running_ = false;
+	cancel_btn_->Disable();
+	audio_cancel_btn_->Disable();
+}
+
+void AIResultPanel::SetFrameResult(const std::string& orig, const std::string& trans) {
+	frame_orig_->ChangeValue(to_wx(orig));
+	frame_trans_->ChangeValue(to_wx(trans));
+	frame_apply_->Enable(!trans.empty());
+}
+
+void AIResultPanel::AppendAudioResult(const std::string& block, int done, int total) {
+	audio_combined_->AppendText(to_wx(block));
+	SetStatus(agi::format("第 %d/%d 条完成", done, total));
+}
+
+void AIResultPanel::AudioJobFinished() {
+	EndJob();
+	if (cancel_->load()) {
+		SetStatus("已取消");
+	} else {
+		SetStatus("音频翻译完成，可编辑后点击【替换选中行】");
+	}
+	if (!audio_combined_->IsEmpty())
+		audio_apply_->Enable();
+}
+
+void AIResultPanel::OnFrameApply(wxCommandEvent&) {
+	if (running_) return;
+	auto* line = c->selectionController->GetActiveLine();
+	if (!line) { SetStatus("没有当前活动行"); return; }
+	std::string v = from_wx(frame_trans_->GetValue());
+	if (v.empty()) { SetStatus("译文为空"); return; }
+	line->Text = newlines_to_N(v);
+	c->ass->Commit(to_wx("AI截图翻译"), AssFile::COMMIT_DIAG_TEXT);
+	SetStatus("已填入当前行");
+}
+
+void AIResultPanel::OnFrameResnap(wxCommandEvent&) {
+	if (c->videoDisplay) {
+		c->videoDisplay->SetTool(std::make_unique<VisualToolAIScreenshot>(c->videoDisplay, c));
+		SetStatus("请在视频画面上拖动鼠标框选要翻译的区域");
+	}
+}
+
+void AIResultPanel::OnFrameRetry(wxCommandEvent&) {
+	RunAIFrameTranslate(c);
+}
+
+void AIResultPanel::OnAudioApply(wxCommandEvent&) {
+	if (running_) return;
+	std::string combined = from_wx(audio_combined_->GetValue());
+	int applied = apply_combined(combined);
+	if (applied > 0) {
+		c->ass->Commit(to_wx("AI音频翻译"), AssFile::COMMIT_DIAG_TEXT);
+		SetStatus(agi::format("已替换 %d 行", applied));
+	} else {
+		SetStatus("没有可识别的【第n条】结果块");
+	}
+}
+
+void AIResultPanel::OnAudioRetry(wxCommandEvent&) {
+	RunAIAudioTranslate(c);
+}
+
+void AIResultPanel::OnAudioClear(wxCommandEvent&) {
+	audio_combined_->Clear();
+	audio_apply_->Disable();
+	SetStatus("已清空");
+}
+
+void AIResultPanel::OnCancelClick(wxCommandEvent&) {
+	if (running_) {
+		cancel_->store(true);
+		SetStatus("正在取消后台任务…");
+		cancel_btn_->Disable();
+		audio_cancel_btn_->Disable();
+	}
+}
+
+void AIResultPanel::OnSettingsClick(wxCommandEvent&) {
+	ShowSettings();
+}
+
+void AIResultPanel::OnCloseClick(wxCommandEvent&) {
+	Show(false);
+	GetParent()->Layout();
+}
+
+int AIResultPanel::apply_combined(const std::string& combined) {
+	struct Head { size_t hstart, start; int num; };
+	std::vector<Head> heads;
+	const std::string tag = "【第"; // 【 = E3 80 90，第 = E7 AC AC
+	const char* close_tag = "\xE3\x80\x91"; // 】
+	size_t init = 0;
+	while (true) {
+		size_t s = combined.find(tag, init);
+		if (s == std::string::npos) break;
+		size_t e = combined.find(close_tag, s);
+		if (e == std::string::npos) break;
+		std::string body = combined.substr(s + tag.size(), e - s - tag.size());
+		int n = 0; bool any = false;
+		for (char ch : body) {
+			if (ch >= '0' && ch <= '9') { n = n * 10 + (ch - '0'); any = true; }
+			else if (any) break;
+		}
+		if (any && n >= 1)
+			heads.push_back({ s, e + strlen(close_tag), n });
+		init = e + strlen(close_tag);
+	}
+	int applied = 0;
+	for (size_t i = 0; i < heads.size(); ++i) {
+		size_t stop = (i + 1 < heads.size()) ? heads[i + 1].hstart : combined.size();
+		std::string block = combined.substr(heads[i].start,
+			stop > heads[i].start ? stop - heads[i].start : 0);
+		int idx = heads[i].num - 1;
+		if (idx < 0 || static_cast<size_t>(idx) >= audio_lines_.size()) continue;
+		std::string trans = extract_after(block, k_yiwen, false);
+		if (trans.empty()) trans = trim_ws(block);
+		if (trans.empty()) continue;
+		audio_lines_[idx]->Text = newlines_to_N(trans);
+		++applied;
+	}
+	return applied;
+}
+
+// ------------------------------------------------------------ 执行翻译函数
+
+void RunAIFrameTranslate(agi::Context* c, int x0, int y0, int x1, int y1) {
+	if (c->aiPanel) {
+		c->aiPanel->Show(true);
+		c->aiPanel->GetParent()->Layout();
+		c->aiPanel->SelectTab(0);
+	}
+
+	auto* provider = c->project->VideoProvider();
+	if (!provider) {
+		if (c->aiPanel) c->aiPanel->SetStatus("未打开视频");
+		return;
+	}
+
+	std::string key = opt_str("Tool/AI/API Key");
+	if (key.empty()) key = seed_legacy_api_key();
+	if (key.empty()) {
+		if (c->aiPanel) {
+			c->aiPanel->SetStatus("请先配置 API 密钥");
+			c->aiPanel->ShowSettings();
+		}
+		return;
+	}
+
+	int w = provider->GetWidth(), h = provider->GetHeight();
+	if (x0 < 0 || y0 < 0 || x1 < 0 || y1 < 0) {
 		double rx0 = OPT_GET("Tool/AI/Region X0")->GetDouble();
 		double ry0 = OPT_GET("Tool/AI/Region Y0")->GetDouble();
 		double rx1 = OPT_GET("Tool/AI/Region X1")->GetDouble();
 		double ry1 = OPT_GET("Tool/AI/Region Y1")->GetDouble();
-		// 优先复用自动对帧拖过的区域
-		if (OPT_GET("Tool/Frame Match/Region X0")->GetDouble() >= 0.0) {
+
+		if (rx0 <= 0 && rx1 <= 0 && OPT_GET("Tool/Frame Match/Region X0")->GetDouble() >= 0.0) {
 			rx0 = OPT_GET("Tool/Frame Match/Region X0")->GetDouble() * 100.0;
 			ry0 = OPT_GET("Tool/Frame Match/Region Y0")->GetDouble() * 100.0;
 			rx1 = OPT_GET("Tool/Frame Match/Region X1")->GetDouble() * 100.0;
 			ry1 = OPT_GET("Tool/Frame Match/Region Y1")->GetDouble() * 100.0;
 		}
-
-		auto* root = new wxBoxSizer(wxVERTICAL);
-		auto* grid = new wxFlexGridSizer(2, wxSize(6, 4));
-		grid->AddGrowableCol(1, 1);
-
-		auto add_row = [&](const char* label, wxTextCtrl* ctrl) {
-			grid->Add(new wxStaticText(this, wxID_ANY, to_wx(label)),
-				0, wxALIGN_CENTER_VERTICAL);
-			grid->Add(ctrl, 1, wxEXPAND);
-		};
-
-		api_key_ = new wxTextCtrl(this, wxID_ANY, to_wx(key), wxDefaultPosition,
-			wxSize(320, -1), wxTE_PASSWORD);
-		add_row("API 密钥：", api_key_);
-
-		model_ = new wxTextCtrl(this, wxID_ANY, to_wx(model));
-		add_row(mode == AIMode::Frame ? "视觉模型：" : "音频模型：", model_);
-
-		lang_ = new wxTextCtrl(this, wxID_ANY, to_wx(lang));
-		add_row("目标语言：", lang_);
-
-		auto* extra = new wxBoxSizer(wxHORIZONTAL);
-		if (mode == AIMode::Frame) {
-			extra->Add(new wxStaticText(this, wxID_ANY,
-				to_wx("截取区域 左上X / 左上Y / 右下X / 右下Y（%，0-100）：")),
-				0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-			double vals[4] = { rx0, ry0, rx1, ry1 };
-			for (int i = 0; i < 4; ++i) {
-				region_[i] = new wxTextCtrl(this, wxID_ANY,
-					to_wx(std::to_string(std::clamp(static_cast<int>(lround(vals[i])), 0, 100))),
-					wxDefaultPosition, wxSize(44, -1));
-				extra->Add(region_[i], 0);
-				if (i < 3) extra->AddSpacer(4);
-			}
-		} else {
-			extra->Add(new wxStaticText(this, wxID_ANY, to_wx("音频前后补齐(ms)：")),
-				0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-			pad_[0] = new wxTextCtrl(this, wxID_ANY,
-				to_wx(std::to_string(OPT_GET("Tool/AI/Pad Start")->GetInt())),
-				wxDefaultPosition, wxSize(52, -1));
-			extra->Add(pad_[0], 0);
-			extra->AddSpacer(4);
-			pad_[1] = new wxTextCtrl(this, wxID_ANY,
-				to_wx(std::to_string(OPT_GET("Tool/AI/Pad End")->GetInt())),
-				wxDefaultPosition, wxSize(52, -1));
-			extra->Add(pad_[1], 0);
+		if (rx1 <= rx0 || ry1 <= ry0) {
+			rx0 = 0.0; ry0 = 70.0; rx1 = 100.0; ry1 = 100.0;
 		}
-		root->Add(grid, 0, wxEXPAND | wxALL, 8);
-		root->Add(extra, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
-
-		// ---- 操作按钮
-		auto* btns = new wxBoxSizer(wxHORIZONTAL);
-		run_ = new wxButton(this, wxID_ANY, to_wx("开始翻译"));
-		cancel_btn_ = new wxButton(this, wxID_ANY, to_wx("取消"));
-		cancel_btn_->Disable();
-		btns->Add(run_, 0, wxRIGHT, 6);
-		btns->Add(cancel_btn_, 0);
-		root->Add(btns, 0, wxLEFT | wxRIGHT, 8);
-
-		status_ = new wxStaticText(this, wxID_ANY, to_wx("就绪"));
-		root->Add(status_, 0, wxALL, 8);
-
-		// ---- 结果区
-		if (mode == AIMode::Frame) {
-			auto* res = new wxFlexGridSizer(2, wxSize(6, 4));
-			res->AddGrowableCol(1, 1);
-			res->AddGrowableRow(0, 1);
-			res->AddGrowableRow(1, 1);
-			orig_ = new wxTextCtrl(this, wxID_ANY, "", wxDefaultPosition,
-				wxSize(360, 60), wxTE_MULTILINE);
-			trans_ = new wxTextCtrl(this, wxID_ANY, "", wxDefaultPosition,
-				wxSize(360, 60), wxTE_MULTILINE);
-			res->Add(new wxStaticText(this, wxID_ANY, to_wx("原文：")),
-				0, wxALIGN_TOP | wxALIGN_RIGHT);
-			res->Add(orig_, 1, wxEXPAND);
-			res->Add(new wxStaticText(this, wxID_ANY, to_wx("译文：")),
-				0, wxALIGN_TOP | wxALIGN_RIGHT);
-			res->Add(trans_, 1, wxEXPAND);
-			root->Add(res, 1, wxEXPAND | wxLEFT | wxRIGHT, 8);
-		} else {
-			combined_ = new wxTextCtrl(this, wxID_ANY, "", wxDefaultPosition,
-				wxSize(440, 260), wxTE_MULTILINE);
-			root->Add(combined_, 1, wxEXPAND | wxLEFT | wxRIGHT, 8);
-		}
-
-		auto* apply_row = new wxBoxSizer(wxHORIZONTAL);
-		apply_ = new wxButton(this, wxID_ANY,
-			mode == AIMode::Frame ? to_wx("填入当前行") : to_wx("替换选中行"));
-		apply_->Disable();
-		auto* close_btn = new wxButton(this, wxID_CANCEL, to_wx("关闭"));
-		Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-			// 强制关闭：中断后台任务后立即退出模态循环
-			cancel_->store(true);
-			alive_->store(false);
-			EndModal(wxID_CANCEL);
-		}, close_btn->GetId());
-		apply_row->Add(apply_, 0, wxRIGHT, 6);
-		apply_row->AddStretchSpacer(1);
-		apply_row->Add(close_btn, 0);
-		root->Add(apply_row, 0, wxEXPAND | wxALL, 8);
-
-		SetSizerAndFit(root);
-		Centre();
-
-		Bind(wxEVT_BUTTON, &AITranslationDialog::OnRun, this, run_->GetId());
-		Bind(wxEVT_BUTTON, &AITranslationDialog::OnCancelClick, this, cancel_btn_->GetId());
-		Bind(wxEVT_BUTTON, &AITranslationDialog::OnApply, this, apply_->GetId());
-		Bind(wxEVT_CLOSE_WINDOW, &AITranslationDialog::OnClose, this);
+		x0 = std::clamp(static_cast<int>(w * rx0 / 100.0), 0, w - 1);
+		y0 = std::clamp(static_cast<int>(h * ry0 / 100.0), 0, h - 1);
+		x1 = std::clamp(static_cast<int>(w * rx1 / 100.0), 0, w);
+		y1 = std::clamp(static_cast<int>(h * ry1 / 100.0), 0, h);
 	}
 
-	~AITranslationDialog() override {
-		alive_->store(false);
-		cancel_->store(true);
-	}
-
-private:
-	void save_config() {
-		OPT_SET("Tool/AI/API Key")->SetString(field(api_key_));
-		OPT_SET(mode == AIMode::Frame ? "Tool/AI/Vision Model" : "Tool/AI/Audio Model")
-			->SetString(field(model_));
-		OPT_SET("Tool/AI/Target Lang")->SetString(field(lang_));
-	}
-
-	void save_frame_region() {
-		const char* const keys[4] = { "Tool/AI/Region X0", "Tool/AI/Region Y0",
-			"Tool/AI/Region X1", "Tool/AI/Region Y1" };
-		for (int i = 0; i < 4; ++i) {
-			int p = std::clamp(wxAtoi(region_[i]->GetValue()), 0, 100);
-			OPT_SET(keys[i])->SetDouble(p);
-		}
-	}
-
-	void save_audio_pad() {
-		OPT_SET("Tool/AI/Pad Start")->SetInt(std::clamp(wxAtoi(pad_[0]->GetValue()), 0, 5000));
-		OPT_SET("Tool/AI/Pad End")->SetInt(std::clamp(wxAtoi(pad_[1]->GetValue()), 0, 5000));
-	}
-
-	int percent(wxTextCtrl* t) { return std::clamp(wxAtoi(t->GetValue()), 0, 100); }
-
-	void begin_job(const char* doing) {
-		running_ = true;
-		cancel_->store(false);
-		run_->Disable();
-		run_->SetLabel(to_wx(doing));
-		cancel_btn_->Enable();
-		apply_->Disable();
-	}
-
-	void end_job() {
-		running_ = false;
-		run_->Enable();
-		run_->SetLabel(to_wx("重新翻译"));
-		cancel_btn_->Disable();
-	}
-
-	void OnRun(wxCommandEvent&) {
-		std::string key = field(api_key_);
-		std::string model = field(model_);
-		std::string lang = field(lang_);
-		if (key.empty()) { status("请先填写 API 密钥"); return; }
-		if (model.empty()) { status("请填写模型名"); return; }
-
-		if (mode == AIMode::Frame)
-			run_frame(key, model, lang);
-		else
-			run_audio(key, model, lang);
-	}
-
-	void run_frame(const std::string& key, const std::string& model, const std::string& lang) {
-		save_config();
-		save_frame_region();
-
-		auto* provider = c->project->VideoProvider();
-		if (!provider) { status("未打开视频"); return; }
-
-		// 主线程取当前帧并编码（短暂阻塞，换取无锁安全）
-		std::string png_b64;
-		try {
-			int frame = c->videoController->GetFrameN();
-			double time_s = c->videoController->TimeAtFrame(frame, agi::vfr::EXACT) / 1000.0;
-			auto vframe = provider->GetFrame(frame, time_s, true);
-			wxImage img = GetImage(*vframe);
-			int w = img.GetWidth(), h = img.GetHeight();
-			int x0 = w * percent(region_[0]) / 100, x1 = w * percent(region_[2]) / 100;
-			int y0 = h * percent(region_[1]) / 100, y1 = h * percent(region_[3]) / 100;
-			int cw = x1 - x0, ch = y1 - y0;
-			if (cw < 8 || ch < 8) { status("截取区域太小，请检查区域百分比（或在自动对帧工具中拖框）"); return; }
-			wxImage cropped = img.GetSubImage(wxRect(x0, y0, cw, ch));
-			if (cropped.GetWidth() > 1280) {
-				int nh = std::max(1, static_cast<int>(1280.0 * ch / cw));
-				cropped = cropped.Rescale(1280, nh);
-			}
-			wxMemoryOutputStream mos;
-			if (!cropped.SaveFile(mos, wxBITMAP_TYPE_PNG)) { status("PNG 编码失败"); return; }
-			size_t png_len = static_cast<size_t>(mos.GetLength());
-			std::vector<char> png_buf(png_len);
-			if (mos.CopyTo(png_buf.data(), png_len) != png_len) { status("PNG 缓冲读取失败"); return; }
-			png_b64 = base64_encode(png_buf.data(), png_len);
-		} catch (std::exception& e) {
-			status(std::string("取帧失败：") + e.what());
-			return;
-		} catch (...) {
-			status("取帧失败");
+	std::string png_b64;
+	try {
+		int frame = c->videoController->GetFrameN();
+		double time_s = c->videoController->TimeAtFrame(frame, agi::vfr::EXACT) / 1000.0;
+		auto vframe = provider->GetFrame(frame, time_s, true);
+		wxImage img = GetImage(*vframe);
+		int cw = x1 - x0, ch = y1 - y0;
+		if (cw < 8 || ch < 8) {
+			if (c->aiPanel) c->aiPanel->SetStatus("截取区域太小，请重新框选");
 			return;
 		}
+		wxImage cropped = img.GetSubImage(wxRect(x0, y0, cw, ch));
+		if (cropped.GetWidth() > 1280) {
+			int nh = std::max(1, static_cast<int>(1280.0 * ch / cw));
+			cropped = cropped.Rescale(1280, nh);
+		}
+		wxMemoryOutputStream mos;
+		if (!cropped.SaveFile(mos, wxBITMAP_TYPE_PNG)) {
+			if (c->aiPanel) c->aiPanel->SetStatus("PNG 编码失败");
+			return;
+		}
+		size_t png_len = static_cast<size_t>(mos.GetLength());
+		std::vector<char> png_buf(png_len);
+		if (mos.CopyTo(png_buf.data(), png_len) != png_len) {
+			if (c->aiPanel) c->aiPanel->SetStatus("PNG 缓冲读取失败");
+			return;
+		}
+		png_b64 = base64_encode(png_buf.data(), png_len);
+	} catch (std::exception& e) {
+		if (c->aiPanel) c->aiPanel->SetStatus(std::string("取帧失败：") + e.what());
+		return;
+	} catch (...) {
+		if (c->aiPanel) c->aiPanel->SetStatus("取帧失败");
+		return;
+	}
 
-		std::string prompt = std::string("这是动画/影视视频的画面截图。识别图中的字幕或对白文字（忽略水印和台标），并翻译成")
-			+ lang + "，用词自然、符合字幕阅读习惯。严格按两行输出：\n原文=识别出的文字\n译文=翻译结果";
-		std::string body = "{\"model\":\"" + jesc(model) + "\",\"messages\":[{\"role\":\"user\",\"content\":["
-			+ "{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64," + png_b64 + "\"}},"
-			+ "{\"type\":\"text\",\"text\":\"" + jesc(prompt) + "\"}]}]}";
+	std::string model = opt_str("Tool/AI/Vision Model", "qwen3.8-flash");
+	std::string lang = opt_str("Tool/AI/Target Lang", "简体中文");
+	std::string prompt = std::string("这是动画/影视视频的画面截图。识别图中的字幕或对白文字（忽略水印和台标），并翻译成")
+		+ lang + "，用词自然、符合字幕阅读习惯。严格按两行输出：\n原文=识别出的文字\n译文=翻译结果";
+	std::string body = "{\"model\":\"" + jesc(model) + "\",\"messages\":[{\"role\":\"user\",\"content\":["
+		+ "{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64," + png_b64 + "\"}},"
+		+ "{\"type\":\"text\",\"text\":\"" + jesc(prompt) + "\"}]}]}";
 
-		begin_job("识别中…");
-		status("翻译中，请稍候…");
+	auto panel = c->aiPanel;
+	if (!panel) return;
+	panel->BeginJob("识别中…");
+	panel->SetStatus("正在调用大模型识别并翻译，请稍候…");
+	auto alive = panel->GetAlive();
+	auto cancel = panel->GetCancel();
 
-		auto self = this;
-		auto alive = alive_;
-		auto cancel = cancel_;
-		agi::dispatch::Background().Async([self, alive, cancel, key, body] {
-			AIResult r = AIChatComplete(key, body, false, cancel);
-			agi::dispatch::Main().Async([self, alive, r] {
-				if (!*alive) return;
-				self->frame_done(r);
-			});
+	agi::dispatch::Background().Async([panel, alive, cancel, key, body] {
+		AIResult r = AIChatComplete(key, body, false, cancel);
+		agi::dispatch::Main().Async([panel, alive, cancel, r] {
+			if (!*alive) return;
+			panel->EndJob();
+			if (cancel->load()) {
+				panel->SetStatus("已取消");
+				return;
+			}
+			if (!r.ok) {
+				panel->SetStatus(r.error);
+				return;
+			}
+			std::string orig = extract_between(r.text, k_orig, k_yiwen);
+			std::string trans = extract_after(r.text, k_yiwen, false);
+			if (trans.empty()) trans = trim_ws(r.text);
+			panel->SetFrameResult(orig, trans);
+			panel->SetStatus("完成，可编辑后点击【填入当前行】");
 		});
+	});
+}
+
+void RunAIAudioTranslate(agi::Context* c) {
+	if (c->aiPanel) {
+		c->aiPanel->Show(true);
+		c->aiPanel->GetParent()->Layout();
+		c->aiPanel->SelectTab(1);
 	}
 
-	void frame_done(const AIResult& r) {
-		end_job();
-		if (cancel_->load()) { status("已取消"); return; }
-		if (!r.ok) {
-			status(r.error);
-			return;
-		}
-		set_field(orig_, extract_between(r.text, k_orig, k_yiwen));
-		std::string trans = extract_after(r.text, k_yiwen, false);
-		if (trans.empty()) trans = trim_ws(r.text);
-		set_field(trans_, trans);
-		status("完成，可编辑后填入");
-		apply_->Enable();
+	auto* provider = c->project->AudioProvider();
+	if (!provider) {
+		if (c->aiPanel) c->aiPanel->SetStatus("未打开音频（需要项目已加载音频）");
+		return;
 	}
 
-	void run_audio(const std::string& key, const std::string& model, const std::string& lang) {
-		save_config();
-		save_audio_pad();
+	auto lines = c->selectionController->GetSortedSelection();
+	if (lines.empty()) {
+		if (c->aiPanel) c->aiPanel->SetStatus("请先在字幕网格中选中要翻译的行");
+		return;
+	}
 
-		auto* provider = c->project->AudioProvider();
-		if (!provider) { status("未打开音频（需要项目已加载音频）"); return; }
-		audio_lines = c->selectionController->GetSortedSelection();
-		if (audio_lines.empty()) { status("请先选中要翻译的行"); return; }
-
-		struct Job { int64_t s0, s1; int idx; int start_ms; };
-		int pad0 = std::clamp(wxAtoi(pad_[0]->GetValue()), 0, 5000);
-		int pad1 = std::clamp(wxAtoi(pad_[1]->GetValue()), 0, 5000);
-		int rate = provider->GetSampleRate();
-		std::vector<Job> jobs;
-		jobs.reserve(audio_lines.size());
-		for (size_t i = 0; i < audio_lines.size(); ++i) {
-			int start = audio_lines[i]->Start;
-			int end = audio_lines[i]->End;
-			if (end <= start) end = start + 1000;
-			jobs.push_back({ static_cast<int64_t>(start - pad0) * rate / 1000,
-				static_cast<int64_t>(end + pad1) * rate / 1000,
-				static_cast<int>(i), start });
+	std::string key = opt_str("Tool/AI/API Key");
+	if (key.empty()) key = seed_legacy_api_key();
+	if (key.empty()) {
+		if (c->aiPanel) {
+			c->aiPanel->SetStatus("请先配置 API 密钥");
+			c->aiPanel->ShowSettings();
 		}
+		return;
+	}
 
-		bool is_omni = model.find("omni") != std::string::npos;
-		std::string prompt = is_omni
-			? "听这段音频：先转写说话内容原文，再翻译成" + lang + "（字幕风格）。严格按两行输出：\n原文=...\n译文=..."
-			: "转写这段音频中的语音内容。";
+	struct Job { int64_t s0, s1; int idx; int start_ms; };
+	int pad0 = OPT_GET("Tool/AI/Pad Start")->GetInt();
+	int pad1 = OPT_GET("Tool/AI/Pad End")->GetInt();
+	int rate = provider->GetSampleRate();
+	std::vector<Job> jobs;
+	jobs.reserve(lines.size());
+	for (size_t i = 0; i < lines.size(); ++i) {
+		int start = lines[i]->Start;
+		int end = lines[i]->End;
+		if (end <= start) end = start + 1000;
+		jobs.push_back({ static_cast<int64_t>(start - pad0) * rate / 1000,
+			static_cast<int64_t>(end + pad1) * rate / 1000,
+			static_cast<int>(i), start });
+	}
 
-		combined_->ChangeValue("");
-		begin_job("翻译中…");
-		status(agi::format("共 %d 行，开始处理…", static_cast<int>(jobs.size())));
+	std::string model = opt_str("Tool/AI/Audio Model", "qwen3.8-omni-flash");
+	std::string lang = opt_str("Tool/AI/Target Lang", "简体中文");
+	bool is_omni = model.find("omni") != std::string::npos;
+	std::string prompt = is_omni
+		? "听这段音频：先转写说话内容原文，再翻译成" + lang + "（字幕风格）。严格按两行输出：\n原文=...\n译文=..."
+		: "转写这段音频中的语音内容。";
 
-		auto self = this;
-		auto alive = alive_;
-		auto cancel = cancel_;
-		int total = static_cast<int>(jobs.size());
-		agi::dispatch::Background().Async([self, alive, cancel, provider, key, model,
-		                                          prompt, is_omni, jobs, total] {
-			int done = 0;
-			for (auto const& j : jobs) {
-				if (cancel->load()) break;
-				std::string block = "【第" + std::to_string(j.idx + 1) + "条 "
-					+ ms_to_hms(j.start_ms) + "】\n";
-				std::string wav = build_wav16k(provider, j.s0, j.s1);
-				AIResult r;
-				if (wav.empty()) {
-					r.error = "切分音频失败（时间区间无效或解码错误）";
-				} else {
-					std::string b64 = base64_encode(wav.data(), wav.size());
-					std::string body = "{\"model\":\"" + jesc(model) + "\",\"messages\":[{\"role\":\"user\",\"content\":["
-						+ "{\"type\":\"input_audio\",\"input_audio\":{\"data\":\"data:;base64," + b64 + "\",\"format\":\"wav\"}},"
-						+ "{\"type\":\"text\",\"text\":\"" + jesc(prompt) + "\"}]}]"
-						+ (is_omni ? ",\"stream\":true" : "") + "}";
-					r = AIChatComplete(key, body, is_omni, cancel);
-				}
-				block += r.ok ? r.text : std::string("错误: ") + r.error;
-				block += "\n";
-				int dn = ++done;
-				agi::dispatch::Main().Async([self, alive, blk = std::move(block), dn, total] {
-					if (!*alive) return;
-					self->combined_->AppendText(to_wx(blk));
-					self->status(agi::format("第 %d/%d 条完成", dn, total));
-				});
+	auto panel = c->aiPanel;
+	if (!panel) return;
+	panel->SetAudioLines(lines);
+	panel->BeginJob("音频翻译中…");
+	panel->SetStatus(agi::format("共 %d 行，开始切取音频并翻译…", static_cast<int>(jobs.size())));
+
+	auto alive = panel->GetAlive();
+	auto cancel = panel->GetCancel();
+	int total = static_cast<int>(jobs.size());
+
+	agi::dispatch::Background().Async([panel, alive, cancel, provider, key, model, prompt, is_omni, jobs, total] {
+		int done = 0;
+		for (auto const& j : jobs) {
+			if (cancel->load()) break;
+			std::string block = "【第" + std::to_string(j.idx + 1) + "条 "
+				+ ms_to_hms(j.start_ms) + "】\n";
+			std::string wav = build_wav16k(provider, j.s0, j.s1);
+			AIResult r;
+			if (wav.empty()) {
+				r.error = "切分音频失败（时间区间无效或解码错误）";
+			} else {
+				std::string b64 = base64_encode(wav.data(), wav.size());
+				std::string body = "{\"model\":\"" + jesc(model) + "\",\"messages\":[{\"role\":\"user\",\"content\":["
+					+ "{\"type\":\"input_audio\",\"input_audio\":{\"data\":\"data:;base64," + b64 + "\",\"format\":\"wav\"}},"
+					+ "{\"type\":\"text\",\"text\":\"" + jesc(prompt) + "\"}]}]"
+					+ (is_omni ? ",\"stream\":true" : "") + "}";
+				r = AIChatComplete(key, body, is_omni, cancel);
 			}
-			agi::dispatch::Main().Async([self, alive] {
+			block += r.ok ? r.text : std::string("错误: ") + r.error;
+			block += "\n";
+			int dn = ++done;
+			agi::dispatch::Main().Async([panel, alive, blk = std::move(block), dn, total] {
 				if (!*alive) return;
-				self->audio_job_finished();
+				panel->AppendAudioResult(blk, dn, total);
 			});
+		}
+		agi::dispatch::Main().Async([panel, alive] {
+			if (!*alive) return;
+			panel->AudioJobFinished();
 		});
-	}
+	});
+}
 
-	void audio_job_finished() {
-		end_job();
-		if (cancel_->load()) {
-			status("已取消");
-			if (!combined_->IsEmpty()) apply_->Enable();
-			return;
-		}
-		status("完成，可编辑后替换（换行自动转为 \\N）");
-		apply_->Enable();
-	}
+void ShowAITranslationDialog(agi::Context *c, AIMode mode) {
+	if (mode == AIMode::Frame)
+		RunAIFrameTranslate(c);
+	else
+		RunAIAudioTranslate(c);
+}
 
-	void OnCancelClick(wxCommandEvent&) {
-		if (running_) {
-			cancel_->store(true);
-			status("正在取消…");
-			cancel_btn_->Disable();
-		}
-	}
-
-	void OnApply(wxCommandEvent&) {
-		if (running_) return;
-		if (mode == AIMode::Frame) {
-			auto* line = c->selectionController->GetActiveLine();
-			if (!line) { status("没有当前行"); return; }
-			std::string v = field(trans_);
-			if (v.empty()) { status("译文为空"); return; }
-			line->Text = newlines_to_N(v);
-			c->ass->Commit(to_wx("AI截图翻译"), AssFile::COMMIT_DIAG_TEXT);
-			status("已填入当前行");
-		} else {
-			std::string combined = field(combined_);
-			int applied = apply_combined(combined);
-			if (applied > 0) {
-				c->ass->Commit(to_wx("AI音频翻译"), AssFile::COMMIT_DIAG_TEXT);
-				status(agi::format("已替换 %d 行", applied));
-			} else
-				status("没有可识别的【第n条】结果块");
-		}
-	}
-
-	/// 与 Lua 版 apply_translations 一致：按【第n条…】块定位行并写回
-	int apply_combined(const std::string& combined) {
-		struct Head { size_t hstart, start; int num; };
-		std::vector<Head> heads;
-		const std::string tag = "【第"; // 【 = E3 80 90，第 = E7 AC AC
-		const char* close_tag = "\xE3\x80\x91"; // 】
-		size_t init = 0;
-		while (true) {
-			size_t s = combined.find(tag, init);
-			if (s == std::string::npos) break;
-			size_t e = combined.find(close_tag, s);
-			if (e == std::string::npos) break;
-			std::string body = combined.substr(s + tag.size(), e - s - tag.size());
-			int n = 0; bool any = false;
-			for (char ch : body) {
-				if (ch >= '0' && ch <= '9') { n = n * 10 + (ch - '0'); any = true; }
-				else if (any) break; // 数字读完即止
-			}
-			if (any && n >= 1)
-				heads.push_back({ s, e + strlen(close_tag), n });
-			init = e + strlen(close_tag);
-		}
-		int applied = 0;
-		for (size_t i = 0; i < heads.size(); ++i) {
-			size_t stop = (i + 1 < heads.size()) ? heads[i + 1].hstart : combined.size();
-			std::string block = combined.substr(heads[i].start,
-				stop > heads[i].start ? stop - heads[i].start : 0);
-			int idx = heads[i].num - 1;
-			if (idx < 0 || static_cast<size_t>(idx) >= audio_lines.size()) continue;
-			std::string trans = extract_after(block, k_yiwen, false);
-			if (trans.empty()) trans = trim_ws(block);
-			if (trans.empty()) continue;
-			audio_lines[idx]->Text = newlines_to_N(trans);
-			++applied;
-		}
-		return applied;
-	}
-
-	void OnClose(wxCloseEvent& event) {
-		cancel_->store(true);
-		if (event.CanVeto() && running_) {
-			event.Veto();
-			status("正在取消后台任务，请稍候…");
-			return;
-		}
-		alive_->store(false);
-		EndModal(wxID_CANCEL);
-	}
-};
-
-} // anonymous namespace
+// ------------------------------------------------------------ 阿里百炼网络调用
 
 AIResult AIChatComplete(const std::string& api_key, const std::string& body,
                         bool stream,
@@ -859,7 +1052,7 @@ AIResult AIChatComplete(const std::string& api_key, const std::string& body,
 
 		if (code == 401 || detail.find("api_key") != std::string::npos
 			|| detail.find("API key") != std::string::npos)
-			r.error = "API 密钥无效，请核对上方密钥（" + detail + "）";
+			r.error = "API 密钥无效，请核对密钥设置（" + detail + "）";
 		else if (code == 403 || detail.find("AccessDenied") != std::string::npos)
 			r.error = "模型未开通：" + detail + "\n请到百炼控制台「模型广场」开通该模型后重试";
 		else if (code == 429)
@@ -906,10 +1099,4 @@ AIResult AIChatComplete(const std::string& api_key, const std::string& body,
 	r.text = content;
 	return r;
 #endif
-}
-
-void ShowAITranslationDialog(agi::Context *c, AIMode mode) {
-	auto* dlg = new AITranslationDialog(c, mode);
-	dlg->ShowModal();
-	dlg->Destroy();
 }

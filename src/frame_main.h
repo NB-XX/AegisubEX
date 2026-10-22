@@ -39,6 +39,7 @@ class AegisubApp;
 class AsyncVideoProvider;
 class AudioBox;
 class VideoBox;
+class AIResultPanel;
 namespace agi { class AudioProvider; }
 namespace agi { struct Context; class OptionValue; }
 
@@ -76,6 +77,8 @@ class FrameMain : public wxFrame, private agi::signal::ConnectionScope {
 
 	AudioBox *audioBox;      ///< The audio area
 	VideoBox *videoBox;      ///< The video area
+	AIResultPanel *aiPanel = nullptr; ///< AI result panel (bottom-right)
+	wxSizer *BottomSizer = nullptr;
 
 	wxSizer *MainSizer = nullptr;  ///< Arranges things from top to bottom in the window
 	wxSizer *TopSizer;   ///< Arranges video box and tool box from left to right
