@@ -481,6 +481,9 @@ void VisualToolAIScreenshot::OnMouseEvent(wxMouseEvent &event) {
 				OPT_SET("Tool/AI/Region Y1")->SetDouble(static_cast<double>(y1) * 100.0 / provider->GetHeight());
 
 				RunAIFrameTranslate(c, x0, y0, x1, y1);
+			} else {
+				if (c->aiPanel)
+					c->aiPanel->SetStatus("选区太小，请按住鼠标左键在画面上拖拽出一个矩形框选字幕");
 			}
 		}
 		parent->Render();
@@ -871,7 +874,8 @@ void RunAIFrameTranslate(agi::Context* c, int x0, int y0, int x1, int y1) {
 				return;
 			}
 			if (!r.ok) {
-				panel->SetStatus(r.error);
+				panel->SetStatus("翻译失败：" + r.error);
+				panel->SetFrameResult("", "错误：" + r.error);
 				return;
 			}
 			std::string orig = extract_between(r.text, k_orig, k_yiwen);
@@ -958,9 +962,8 @@ void RunAIAudioTranslate(agi::Context* c) {
 				std::string b64 = base64_encode(wav.data(), wav.size());
 				std::string body = "{\"model\":\"" + jesc(model) + "\",\"messages\":[{\"role\":\"user\",\"content\":["
 					+ "{\"type\":\"input_audio\",\"input_audio\":{\"data\":\"data:;base64," + b64 + "\",\"format\":\"wav\"}},"
-					+ "{\"type\":\"text\",\"text\":\"" + jesc(prompt) + "\"}]}]"
-					+ (is_omni ? ",\"stream\":true" : "") + "}";
-				r = AIChatComplete(key, body, is_omni, cancel);
+					+ "{\"type\":\"text\",\"text\":\"" + jesc(prompt) + "\"}]}]}";
+				r = AIChatComplete(key, body, false, cancel);
 			}
 			block += r.ok ? r.text : std::string("错误: ") + r.error;
 			block += "\n";
@@ -1064,7 +1067,7 @@ AIResult AIChatComplete(const std::string& api_key, const std::string& body,
 
 	std::string content;
 	if (stream) {
-		// SSE：data: {...} 行，取 choices.0.delta.content 拼接
+		// SSE：data: {...} 行，提取 delta.content 拼接
 		std::istringstream iss(response);
 		std::string line;
 		while (std::getline(iss, line)) {
@@ -1075,16 +1078,43 @@ AIResult AIChatComplete(const std::string& api_key, const std::string& body,
 			if (payload == "[DONE]") break;
 			try {
 				auto pt = parse_json(payload);
-				auto it = pt.get_child_optional("choices.0.delta.content");
-				if (it) content += ptree_content(*it);
+				auto choices = pt.get_child_optional("choices");
+				if (choices && !choices->empty()) {
+					auto const& choice = choices->front().second;
+					auto delta = choice.get_child_optional("delta");
+					if (delta) {
+						auto cnt = delta->get_child_optional("content");
+						if (cnt) {
+							std::string t = ptree_content(*cnt);
+							if (!t.empty()) content += t;
+						}
+					}
+				}
 			} catch (...) { }
 		}
 	} else {
 		try {
 			auto pt = parse_json(response);
-			auto it = pt.get_child_optional("choices.0.message.content");
-			if (!it) it = pt.get_child_optional("choices.0.delta.content");
-			if (it) content = ptree_content(*it);
+			auto choices = pt.get_child_optional("choices");
+			if (choices && !choices->empty()) {
+				auto const& choice = choices->front().second;
+				auto msg = choice.get_child_optional("message");
+				if (msg) {
+					auto cnt = msg->get_child_optional("content");
+					if (cnt) content = ptree_content(*cnt);
+					if (content.empty()) {
+						auto rsn = msg->get_child_optional("reasoning_content");
+						if (rsn) content = ptree_content(*rsn);
+					}
+				}
+				if (content.empty()) {
+					auto delta = choice.get_child_optional("delta");
+					if (delta) {
+						auto cnt = delta->get_child_optional("content");
+						if (cnt) content = ptree_content(*cnt);
+					}
+				}
+			}
 		} catch (...) {
 			r.error = "响应格式异常：" + raw_snip();
 			return r;
@@ -1092,7 +1122,8 @@ AIResult AIChatComplete(const std::string& api_key, const std::string& body,
 	}
 
 	if (content.empty()) {
-		r.error = "接口未返回内容：" + raw_snip();
+		r.ok = true;
+		r.text = "（未识别到有效内容）";
 		return r;
 	}
 	r.ok = true;

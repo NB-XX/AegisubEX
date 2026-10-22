@@ -38,7 +38,7 @@ namespace {
 					c->aiPanel->Show(true);
 					c->aiPanel->GetParent()->Layout();
 					c->aiPanel->SelectTab(0);
-					c->aiPanel->SetStatus("请在视频画面上拖动鼠标框选要翻译的区域");
+					c->aiPanel->SetStatus("请在画面上按住左键拖拽框选字幕区域（或点击右侧【重试】）");
 				}
 			}
 		}
