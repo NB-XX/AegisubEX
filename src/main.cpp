@@ -58,6 +58,8 @@
 #include "xdg_desktop_portal_utils.h"
 
 #include <libaegisub/dispatch.h>
+
+#include <wx/imagjpeg.h>
 #include <libaegisub/format_path.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/io.h>
@@ -280,8 +282,9 @@ bool AegisubApp::OnInit() {
 		AssExportFilterChain::Register(std::make_unique<AssFixStylesFilter>());
 		AssExportFilterChain::Register(std::make_unique<AssTransformFramerateFilter>());
 
-		StartupLog("Install PNG handler");
+		StartupLog("Install PNG and JPEG handlers");
 		wxImage::AddHandler(new wxPNGHandler);
+		wxImage::AddHandler(new wxJPEGHandler);
 
 		// Open main frame
 		StartupLog("Create main window");

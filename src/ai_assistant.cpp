@@ -25,6 +25,7 @@
 #include <wx/button.h>
 #include <wx/checkbox.h>
 #include <wx/filename.h>
+#include <wx/imagjpeg.h>
 #include <wx/mstream.h>
 #include <wx/notebook.h>
 #include <wx/sizer.h>
@@ -813,7 +814,8 @@ void RunAIFrameTranslate(agi::Context* c, int x0, int y0, int x1, int y1) {
 		y1 = std::clamp(static_cast<int>(h * ry1 / 100.0), 0, h);
 	}
 
-	std::string png_b64;
+	std::string img_b64;
+	const char* mime = "image/jpeg";
 	try {
 		int frame = c->videoController->GetFrameN();
 		double time_s = c->videoController->TimeAtFrame(frame, agi::vfr::EXACT) / 1000.0;
@@ -825,22 +827,34 @@ void RunAIFrameTranslate(agi::Context* c, int x0, int y0, int x1, int y1) {
 			return;
 		}
 		wxImage cropped = img.GetSubImage(wxRect(x0, y0, cw, ch));
-		if (cropped.GetWidth() > 1280) {
-			int nh = std::max(1, static_cast<int>(1280.0 * ch / cw));
-			cropped = cropped.Rescale(1280, nh);
+
+		// 适当缩放：字幕识别最佳宽度不超过 960px，兼顾清晰度与极快的上传/推理速度
+		if (cropped.GetWidth() > 960) {
+			int nh = std::max(1, static_cast<int>(960.0 * ch / cw));
+			cropped = cropped.Rescale(960, nh);
 		}
+
+		// 使用高质量 JPEG 压缩（品质 85%），体积比 PNG 减小 85%~90%，极大提升传输速度
+		if (!wxImage::FindHandler(wxBITMAP_TYPE_JPEG)) {
+			wxImage::AddHandler(new wxJPEGHandler);
+		}
+		cropped.SetOption(wxIMAGE_OPTION_QUALITY, 85);
 		wxMemoryOutputStream mos;
-		if (!cropped.SaveFile(mos, wxBITMAP_TYPE_PNG)) {
-			if (c->aiPanel) c->aiPanel->SetStatus("PNG 编码失败");
+		if (!cropped.SaveFile(mos, wxBITMAP_TYPE_JPEG)) {
+			mime = "image/png";
+			if (!cropped.SaveFile(mos, wxBITMAP_TYPE_PNG)) {
+				if (c->aiPanel) c->aiPanel->SetStatus("图像编码失败");
+				return;
+			}
+		}
+
+		size_t img_len = static_cast<size_t>(mos.GetLength());
+		std::vector<char> img_buf(img_len);
+		if (mos.CopyTo(img_buf.data(), img_len) != img_len) {
+			if (c->aiPanel) c->aiPanel->SetStatus("图像缓冲读取失败");
 			return;
 		}
-		size_t png_len = static_cast<size_t>(mos.GetLength());
-		std::vector<char> png_buf(png_len);
-		if (mos.CopyTo(png_buf.data(), png_len) != png_len) {
-			if (c->aiPanel) c->aiPanel->SetStatus("PNG 缓冲读取失败");
-			return;
-		}
-		png_b64 = base64_encode(png_buf.data(), png_len);
+		img_b64 = base64_encode(img_buf.data(), img_len);
 	} catch (std::exception& e) {
 		if (c->aiPanel) c->aiPanel->SetStatus(std::string("取帧失败：") + e.what());
 		return;
@@ -854,8 +868,8 @@ void RunAIFrameTranslate(agi::Context* c, int x0, int y0, int x1, int y1) {
 	std::string prompt = std::string("这是动画/影视视频的画面截图。识别图中的字幕或对白文字（忽略水印和台标），并翻译成")
 		+ lang + "，用词自然、符合字幕阅读习惯。严格按两行输出：\n原文=识别出的文字\n译文=翻译结果";
 	std::string body = "{\"model\":\"" + jesc(model) + "\",\"messages\":[{\"role\":\"user\",\"content\":["
-		+ "{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64," + png_b64 + "\"}},"
-		+ "{\"type\":\"text\",\"text\":\"" + jesc(prompt) + "\"}]}]}";
+		+ "{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:" + mime + ";base64," + img_b64 + "\"}},"
+		+ "{\"type\":\"text\",\"text\":\"" + jesc(prompt) + "\"}]}],\"max_tokens\":512}";
 
 	auto panel = c->aiPanel;
 	if (!panel) return;
@@ -1008,6 +1022,7 @@ AIResult AIChatComplete(const std::string& api_key, const std::string& body,
 	std::string auth = "Authorization: Bearer " + api_key;
 	hdrs = curl_slist_append(hdrs, auth.c_str());
 	hdrs = curl_slist_append(hdrs, "Content-Type: application/json");
+	hdrs = curl_slist_append(hdrs, "Expect:"); // 禁用 100-continue，彻底解决大包等待挂起/延迟问题
 
 	curl_easy_setopt(h, CURLOPT_URL, url);
 	curl_easy_setopt(h, CURLOPT_POST, 1L);
@@ -1019,8 +1034,8 @@ AIResult AIChatComplete(const std::string& api_key, const std::string& body,
 	curl_easy_setopt(h, CURLOPT_NOPROGRESS, 0L);
 	curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, curl_xfer_cb);
 	curl_easy_setopt(h, CURLOPT_XFERINFODATA, cancel.get());
-	curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 20L);
-	curl_easy_setopt(h, CURLOPT_TIMEOUT, 180L);
+	curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 15L);
+	curl_easy_setopt(h, CURLOPT_TIMEOUT, 60L);
 	curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
 	curl_easy_setopt(h, CURLOPT_USERAGENT, "Aegisub AI Assistant");
 
