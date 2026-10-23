@@ -650,35 +650,39 @@ void SubsTextEditCtrl::OnLocalStyleQuick(wxCommandEvent &event) {
 
 	if (id == EDIT_MENU_LOCAL_STYLE_PRIMARY) {
 		agi::Color initial = state.has_c1 ? state.c1 : style->primary;
-		GetColorFromUser(this, initial, false, [=, this](agi::Color col) {
-			std::string open = "{\\c" + col.GetAssOverrideFormatted() + "}";
+		agi::Color chosen = initial;
+		if (GetColorFromUser(this, initial, false, [&](agi::Color col) { chosen = col; })) {
+			std::string open = "{\\c" + chosen.GetAssOverrideFormatted() + "}";
 			std::string close = state.has_c1 ? "{\\c" + state.c1.GetAssOverrideFormatted() + "}" : "{\\c}";
 			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
-		});
+		}
 	}
 	else if (id == EDIT_MENU_LOCAL_STYLE_OUTLINE) {
 		agi::Color initial = state.has_c3 ? state.c3 : style->outline;
-		GetColorFromUser(this, initial, false, [=, this](agi::Color col) {
-			std::string open = "{\\3c" + col.GetAssOverrideFormatted() + "}";
+		agi::Color chosen = initial;
+		if (GetColorFromUser(this, initial, false, [&](agi::Color col) { chosen = col; })) {
+			std::string open = "{\\3c" + chosen.GetAssOverrideFormatted() + "}";
 			std::string close = state.has_c3 ? "{\\3c" + state.c3.GetAssOverrideFormatted() + "}" : "{\\3c}";
 			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
-		});
+		}
 	}
 	else if (id == EDIT_MENU_LOCAL_STYLE_SHADOW) {
 		agi::Color initial = state.has_c4 ? state.c4 : style->shadow;
-		GetColorFromUser(this, initial, false, [=, this](agi::Color col) {
-			std::string open = "{\\4c" + col.GetAssOverrideFormatted() + "}";
+		agi::Color chosen = initial;
+		if (GetColorFromUser(this, initial, false, [&](agi::Color col) { chosen = col; })) {
+			std::string open = "{\\4c" + chosen.GetAssOverrideFormatted() + "}";
 			std::string close = state.has_c4 ? "{\\4c" + state.c4.GetAssOverrideFormatted() + "}" : "{\\4c}";
 			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
-		});
+		}
 	}
 	else if (id == EDIT_MENU_LOCAL_STYLE_SECONDARY) {
 		agi::Color initial = state.has_c2 ? state.c2 : style->secondary;
-		GetColorFromUser(this, initial, false, [=, this](agi::Color col) {
-			std::string open = "{\\2c" + col.GetAssOverrideFormatted() + "}";
+		agi::Color chosen = initial;
+		if (GetColorFromUser(this, initial, false, [&](agi::Color col) { chosen = col; })) {
+			std::string open = "{\\2c" + chosen.GetAssOverrideFormatted() + "}";
 			std::string close = state.has_c2 ? "{\\2c" + state.c2.GetAssOverrideFormatted() + "}" : "{\\2c}";
 			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
-		});
+		}
 	}
 	else if (id == EDIT_MENU_LOCAL_STYLE_FONT_SIZE) {
 		long init_fs = state.has_fs ? state.fs : (long)style->fontsize;
