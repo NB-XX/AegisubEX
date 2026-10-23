@@ -28,6 +28,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "subs_edit_ctrl.h"
+#include "dialog_local_style.h"
 
 #include "ass_dialogue.h"
 #include "command/command.h"
@@ -62,6 +63,7 @@
 /// Event ids
 // Check menu.h for id range allocation before editing this enum
 enum {
+	EDIT_MENU_LOCAL_STYLE = (wxID_HIGHEST + 1) + 3999,
 	EDIT_MENU_SPLIT_PRESERVE = (wxID_HIGHEST + 1) + 4000,
 	EDIT_MENU_SPLIT_ESTIMATE,
 	EDIT_MENU_SPLIT_VIDEO,
@@ -123,6 +125,7 @@ SubsTextEditCtrl::SubsTextEditCtrl(wxWindow* parent, wxSize wsize, long style, a
 		Bind(wxEVT_MENU, bind(&cmd::call, "edit/line/split/video", context), EDIT_MENU_SPLIT_VIDEO);
 	}
 
+	Bind(wxEVT_MENU, &SubsTextEditCtrl::OnLocalStyleChange, this, EDIT_MENU_LOCAL_STYLE);
 	Bind(wxEVT_CONTEXT_MENU, &SubsTextEditCtrl::OnContextMenu, this);
 	Bind(wxEVT_IDLE, std::bind(&SubsTextEditCtrl::UpdateCallTip, this));
 	Bind(wxEVT_STC_DOUBLECLICK, &SubsTextEditCtrl::OnDoubleClick, this);
@@ -390,6 +393,10 @@ void SubsTextEditCtrl::OnContextMenu(wxContextMenuEvent &event) {
 	currentWord = line_text.substr(currentWordPos.first, currentWordPos.second);
 
 	wxMenu menu;
+	if (context) {
+		menu.Append(EDIT_MENU_LOCAL_STYLE, _("局部样式变更..."))->Enable(GetSelectionStart() != GetSelectionEnd());
+		menu.AppendSeparator();
+	}
 	if (spellchecker) {
 		AddSpellCheckerEntries(menu);
 
@@ -594,4 +601,17 @@ std::pair<int, int> SubsTextEditCtrl::GetBoundsOfWordAtPosition(int pos) {
 	}
 
 	return {0, 0};
+}
+
+void SubsTextEditCtrl::OnLocalStyleChange(wxCommandEvent &) {
+	if (!context) return;
+	int sel_start = GetSelectionStart();
+	int sel_end = GetSelectionEnd();
+	if (sel_start == sel_end) return;
+	if (sel_start > sel_end) std::swap(sel_start, sel_end);
+
+	DialogLocalStyle dlg(this, context, sel_start, sel_end);
+	if (dlg.ShowModal() == wxID_OK) {
+		dlg.Apply();
+	}
 }

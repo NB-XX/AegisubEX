@@ -84,6 +84,7 @@ class SubsTextEditCtrl final : public wxStyledTextCtrl, private agi::signal::Con
 	/// Tokenized version of line_text
 	std::vector<agi::ass::DialogueToken> tokenized_line;
 
+	void OnLocalStyleChange(wxCommandEvent &);
 	void OnContextMenu(wxContextMenuEvent &);
 	void OnDoubleClick(wxStyledTextEvent&);
 	void OnUseSuggestion(wxCommandEvent &event);
