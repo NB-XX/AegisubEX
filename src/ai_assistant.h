@@ -110,6 +110,7 @@ class VisualToolAIScreenshot final : public VisualToolBase {
 
 public:
 	VisualToolAIScreenshot(VideoDisplay *parent, agi::Context *context);
+	~VisualToolAIScreenshot() override;
 	void OnMouseEvent(wxMouseEvent &event) override;
 	bool OnKeyDown(wxKeyEvent &event) override;
 	void Draw() override;

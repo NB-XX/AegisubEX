@@ -77,6 +77,7 @@ class AsyncVideoProvider {
 	/// Monotonic counter used to drop frames when changes arrive faster than
 	/// they can be rendered
 	std::atomic<uint_fast32_t> version{ 0 };
+	std::atomic<bool> show_subtitles{ true };
 
 	std::vector<std::shared_ptr<VideoFrame>> buffers;
 
@@ -123,6 +124,8 @@ public:
 
 	/// Ask the video provider to change YCbCr matrices
 	void SetColorSpace(agi::ycbcr::Header matrix);
+	void SetShowSubtitles(bool val) { show_subtitles = val; }
+	bool GetShowSubtitles() const { return show_subtitles.load(); }
 
 	int GetFrameCount() const             { return source_provider->GetFrameCount(); }
 	int GetWidth() const                  { return source_provider->GetWidth(); }

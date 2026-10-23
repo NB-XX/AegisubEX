@@ -379,3 +379,13 @@ void VideoController::OnSubtitlesError(SubtitlesProviderErrorEvent const& err) {
 		fmt_tl("Failed rendering subtitles.\nError message reported: %s",
 		err.GetMessage()));
 }
+
+void VideoController::SetShowSubtitles(bool show) {
+	if (!provider) return;
+	provider->SetShowSubtitles(show);
+	RequestFrame();
+}
+
+bool VideoController::GetShowSubtitles() const {
+	return provider ? provider->GetShowSubtitles() : true;
+}

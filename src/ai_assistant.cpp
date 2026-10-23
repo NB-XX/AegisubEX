@@ -423,6 +423,16 @@ public:
 VisualToolAIScreenshot::VisualToolAIScreenshot(VideoDisplay *parent, agi::Context *context)
 : VisualToolBase(parent, context)
 {
+	if (c && c->videoController) {
+		c->videoController->SetShowSubtitles(false);
+	}
+}
+
+VisualToolAIScreenshot::~VisualToolAIScreenshot() {
+	ClearRegion();
+	if (c && c->videoController) {
+		c->videoController->SetShowSubtitles(true);
+	}
 }
 
 void VisualToolAIScreenshot::ClearRegion() {
@@ -434,6 +444,9 @@ void VisualToolAIScreenshot::ClearRegion() {
 bool VisualToolAIScreenshot::OnKeyDown(wxKeyEvent &event) {
 	if (event.GetKeyCode() == WXK_ESCAPE) {
 		ClearRegion();
+		if (c && c->videoController) {
+			c->videoController->SetShowSubtitles(true);
+		}
 		parent->Render();
 		c->videoDisplay->SetTool(std::make_unique<VisualToolCross>(c->videoDisplay, c));
 		return true;
@@ -445,12 +458,12 @@ void VisualToolAIScreenshot::OnMouseEvent(wxMouseEvent &event) {
 	mouse_pos = Vector2D(event.GetX(), event.GetY());
 
 	if (event.RightDown()) {
-		if (dragging || has_region) {
-			ClearRegion();
-			parent->Render();
-		} else {
-			c->videoDisplay->SetTool(std::make_unique<VisualToolCross>(c->videoDisplay, c));
+		ClearRegion();
+		if (c && c->videoController) {
+			c->videoController->SetShowSubtitles(true);
 		}
+		parent->Render();
+		c->videoDisplay->SetTool(std::make_unique<VisualToolCross>(c->videoDisplay, c));
 	}
 	else if (event.LeftDown()) {
 		start = end = ToScriptCoords(mouse_pos);
@@ -466,7 +479,12 @@ void VisualToolAIScreenshot::OnMouseEvent(wxMouseEvent &event) {
 	else if (event.LeftUp() && dragging) {
 		end = ToScriptCoords(mouse_pos);
 		dragging = false;
+		has_region = false;
 		if (parent->HasCapture()) parent->ReleaseMouse();
+
+		if (c && c->videoController) {
+			c->videoController->SetShowSubtitles(true);
+		}
 
 		auto provider = c->project->VideoProvider();
 		if (provider && script_res.X() > 0 && script_res.Y() > 0) {
@@ -488,6 +506,7 @@ void VisualToolAIScreenshot::OnMouseEvent(wxMouseEvent &event) {
 			}
 		}
 		parent->Render();
+		c->videoDisplay->SetTool(std::make_unique<VisualToolCross>(c->videoDisplay, c));
 	}
 	else if (event.Leaving()) {
 		mouse_pos = Vector2D(-1, -1);

@@ -153,6 +153,8 @@ public:
 
 	/// Get the current frame number
 	int GetFrameN() const { return frame_n; }
+	void SetShowSubtitles(bool show);
+	bool GetShowSubtitles() const;
 
 	/// Get the actual aspect ratio from a predefined AR type
 	double GetARFromType(AspectRatio type) const;
