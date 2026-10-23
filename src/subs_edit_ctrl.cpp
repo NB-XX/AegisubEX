@@ -29,6 +29,10 @@
 
 #include "subs_edit_ctrl.h"
 #include "dialog_local_style.h"
+#include "dialogs.h"
+#include "ass_style.h"
+#include <wx/numdlg.h>
+#include <wx/fontdlg.h>
 
 #include "ass_dialogue.h"
 #include "command/command.h"
@@ -63,7 +67,18 @@
 /// Event ids
 // Check menu.h for id range allocation before editing this enum
 enum {
-	EDIT_MENU_LOCAL_STYLE = (wxID_HIGHEST + 1) + 3999,
+	EDIT_MENU_LOCAL_STYLE_BASE = (wxID_HIGHEST + 1) + 3980,
+	EDIT_MENU_LOCAL_STYLE_PRIMARY,
+	EDIT_MENU_LOCAL_STYLE_OUTLINE,
+	EDIT_MENU_LOCAL_STYLE_SHADOW,
+	EDIT_MENU_LOCAL_STYLE_SECONDARY,
+	EDIT_MENU_LOCAL_STYLE_FONT_SIZE,
+	EDIT_MENU_LOCAL_STYLE_FONT_NAME,
+	EDIT_MENU_LOCAL_STYLE_BOLD,
+	EDIT_MENU_LOCAL_STYLE_ITALIC,
+	EDIT_MENU_LOCAL_STYLE_UNDERLINE,
+	EDIT_MENU_LOCAL_STYLE_STRIKEOUT,
+	EDIT_MENU_LOCAL_STYLE_DIALOG,
 	EDIT_MENU_SPLIT_PRESERVE = (wxID_HIGHEST + 1) + 4000,
 	EDIT_MENU_SPLIT_ESTIMATE,
 	EDIT_MENU_SPLIT_VIDEO,
@@ -125,7 +140,10 @@ SubsTextEditCtrl::SubsTextEditCtrl(wxWindow* parent, wxSize wsize, long style, a
 		Bind(wxEVT_MENU, bind(&cmd::call, "edit/line/split/video", context), EDIT_MENU_SPLIT_VIDEO);
 	}
 
-	Bind(wxEVT_MENU, &SubsTextEditCtrl::OnLocalStyleChange, this, EDIT_MENU_LOCAL_STYLE);
+	for (int id = EDIT_MENU_LOCAL_STYLE_PRIMARY; id <= EDIT_MENU_LOCAL_STYLE_STRIKEOUT; ++id) {
+		Bind(wxEVT_MENU, &SubsTextEditCtrl::OnLocalStyleQuick, this, id);
+	}
+	Bind(wxEVT_MENU, &SubsTextEditCtrl::OnLocalStyleChange, this, EDIT_MENU_LOCAL_STYLE_DIALOG);
 	Bind(wxEVT_CONTEXT_MENU, &SubsTextEditCtrl::OnContextMenu, this);
 	Bind(wxEVT_IDLE, std::bind(&SubsTextEditCtrl::UpdateCallTip, this));
 	Bind(wxEVT_STC_DOUBLECLICK, &SubsTextEditCtrl::OnDoubleClick, this);
@@ -394,7 +412,23 @@ void SubsTextEditCtrl::OnContextMenu(wxContextMenuEvent &event) {
 
 	wxMenu menu;
 	if (context) {
-		menu.Append(EDIT_MENU_LOCAL_STYLE, _("局部样式变更..."))->Enable(GetSelectionStart() != GetSelectionEnd());
+		auto local_style_menu = new wxMenu;
+		local_style_menu->Append(EDIT_MENU_LOCAL_STYLE_PRIMARY, to_wx("主体颜色 (\\c)..."));
+		local_style_menu->Append(EDIT_MENU_LOCAL_STYLE_OUTLINE, to_wx("边框颜色 (\\3c)..."));
+		local_style_menu->Append(EDIT_MENU_LOCAL_STYLE_SHADOW, to_wx("阴影颜色 (\\4c)..."));
+		local_style_menu->Append(EDIT_MENU_LOCAL_STYLE_SECONDARY, to_wx("次要颜色 (\\2c)..."));
+		local_style_menu->AppendSeparator();
+		local_style_menu->Append(EDIT_MENU_LOCAL_STYLE_FONT_SIZE, to_wx("字号大小 (\\fs)..."));
+		local_style_menu->Append(EDIT_MENU_LOCAL_STYLE_FONT_NAME, to_wx("字体名称 (\\fn)..."));
+		local_style_menu->AppendSeparator();
+		local_style_menu->Append(EDIT_MENU_LOCAL_STYLE_BOLD, to_wx("切换粗体 (\\b)"));
+		local_style_menu->Append(EDIT_MENU_LOCAL_STYLE_ITALIC, to_wx("切换斜体 (\\i)"));
+		local_style_menu->Append(EDIT_MENU_LOCAL_STYLE_UNDERLINE, to_wx("切换下划线 (\\u)"));
+		local_style_menu->Append(EDIT_MENU_LOCAL_STYLE_STRIKEOUT, to_wx("切换删除线 (\\s)"));
+		local_style_menu->AppendSeparator();
+		local_style_menu->Append(EDIT_MENU_LOCAL_STYLE_DIALOG, to_wx("多重修改..."));
+
+		menu.AppendSubMenu(local_style_menu, to_wx("局部样式变更"))->Enable(GetSelectionStart() != GetSelectionEnd());
 		menu.AppendSeparator();
 	}
 	if (spellchecker) {
@@ -601,6 +635,97 @@ std::pair<int, int> SubsTextEditCtrl::GetBoundsOfWordAtPosition(int pos) {
 	}
 
 	return {0, 0};
+}
+
+void SubsTextEditCtrl::OnLocalStyleQuick(wxCommandEvent &event) {
+	if (!context) return;
+	int sel_start = GetSelectionStart();
+	int sel_end = GetSelectionEnd();
+	if (sel_start == sel_end) return;
+	if (sel_start > sel_end) std::swap(sel_start, sel_end);
+
+	const AssStyle *style = nullptr;
+	auto state = AnalyzeLocalStylePreState(context, sel_start, style);
+	int id = event.GetId();
+
+	if (id == EDIT_MENU_LOCAL_STYLE_PRIMARY) {
+		agi::Color initial = state.has_c1 ? state.c1 : style->primary;
+		GetColorFromUser(this, initial, false, [=, this](agi::Color col) {
+			std::string open = "{\\c" + col.GetAssOverrideFormatted() + "}";
+			std::string close = state.has_c1 ? "{\\c" + state.c1.GetAssOverrideFormatted() + "}" : "{\\c}";
+			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
+		});
+	}
+	else if (id == EDIT_MENU_LOCAL_STYLE_OUTLINE) {
+		agi::Color initial = state.has_c3 ? state.c3 : style->outline;
+		GetColorFromUser(this, initial, false, [=, this](agi::Color col) {
+			std::string open = "{\\3c" + col.GetAssOverrideFormatted() + "}";
+			std::string close = state.has_c3 ? "{\\3c" + state.c3.GetAssOverrideFormatted() + "}" : "{\\3c}";
+			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
+		});
+	}
+	else if (id == EDIT_MENU_LOCAL_STYLE_SHADOW) {
+		agi::Color initial = state.has_c4 ? state.c4 : style->shadow;
+		GetColorFromUser(this, initial, false, [=, this](agi::Color col) {
+			std::string open = "{\\4c" + col.GetAssOverrideFormatted() + "}";
+			std::string close = state.has_c4 ? "{\\4c" + state.c4.GetAssOverrideFormatted() + "}" : "{\\4c}";
+			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
+		});
+	}
+	else if (id == EDIT_MENU_LOCAL_STYLE_SECONDARY) {
+		agi::Color initial = state.has_c2 ? state.c2 : style->secondary;
+		GetColorFromUser(this, initial, false, [=, this](agi::Color col) {
+			std::string open = "{\\2c" + col.GetAssOverrideFormatted() + "}";
+			std::string close = state.has_c2 ? "{\\2c" + state.c2.GetAssOverrideFormatted() + "}" : "{\\2c}";
+			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
+		});
+	}
+	else if (id == EDIT_MENU_LOCAL_STYLE_FONT_SIZE) {
+		long init_fs = state.has_fs ? state.fs : (long)style->fontsize;
+		long new_fs = wxGetNumberFromUser(to_wx("请输入字号大小 (1 - 1000)："), to_wx("字号:"), to_wx("局部字号变更"), init_fs, 1, 1000, this);
+		if (new_fs > 0) {
+			std::string open = "{\\fs" + std::to_string(new_fs) + "}";
+			std::string close = state.has_fs ? "{\\fs" + std::to_string(state.fs) + "}" : "{\\fs}";
+			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
+		}
+	}
+	else if (id == EDIT_MENU_LOCAL_STYLE_FONT_NAME) {
+		wxFont init_font((int)(state.has_fs ? state.fs : style->fontsize), wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, to_wx(state.has_fn ? state.fn : style->font));
+		wxFont font = wxGetFontFromUser(this, init_font);
+		if (font.IsOk()) {
+			std::string open = "{\\fn" + from_wx(font.GetFaceName()) + "}";
+			std::string close = state.has_fn ? "{\\fn" + state.fn + "}" : "{\\fn}";
+			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
+		}
+	}
+	else if (id == EDIT_MENU_LOCAL_STYLE_BOLD) {
+		int cur_b = state.has_b ? state.b : (style->bold ? 1 : 0);
+		int new_b = (cur_b == 0 ? 1 : 0);
+		std::string open = "{\\b" + std::to_string(new_b) + "}";
+		std::string close = state.has_b ? "{\\b" + std::to_string(state.b) + "}" : "{\\b}";
+		ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
+	}
+	else if (id == EDIT_MENU_LOCAL_STYLE_ITALIC) {
+		int cur_i = state.has_i ? state.i : (style->italic ? 1 : 0);
+		int new_i = (cur_i == 0 ? 1 : 0);
+		std::string open = "{\\i" + std::to_string(new_i) + "}";
+		std::string close = state.has_i ? "{\\i" + std::to_string(state.i) + "}" : "{\\i}";
+		ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
+	}
+	else if (id == EDIT_MENU_LOCAL_STYLE_UNDERLINE) {
+		int cur_u = state.has_u ? state.u : (style->underline ? 1 : 0);
+		int new_u = (cur_u == 0 ? 1 : 0);
+		std::string open = "{\\u" + std::to_string(new_u) + "}";
+		std::string close = state.has_u ? "{\\u" + std::to_string(state.u) + "}" : "{\\u}";
+		ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
+	}
+	else if (id == EDIT_MENU_LOCAL_STYLE_STRIKEOUT) {
+		int cur_s = state.has_s ? state.s : (style->strikeout ? 1 : 0);
+		int new_s = (cur_s == 0 ? 1 : 0);
+		std::string open = "{\\s" + std::to_string(new_s) + "}";
+		std::string close = state.has_s ? "{\\s" + std::to_string(state.s) + "}" : "{\\s}";
+		ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
+	}
 }
 
 void SubsTextEditCtrl::OnLocalStyleChange(wxCommandEvent &) {

@@ -646,9 +646,9 @@ struct video_play final : public validator_video_loaded {
 struct review_mode final : public validator_video_loaded {
 	CMD_NAME("review/mode")
 	CMD_ICON(spellcheck_toolbutton)
-	STR_MENU("字幕审校模式")
-	STR_DISP("字幕审校")
-	STR_HELP("进入或退出字幕审校模式")
+	wxString StrMenu(const agi::Context *) const override { return to_wx("字幕审校模式"); }
+	wxString StrDisplay(const agi::Context *) const override { return ""; }
+	wxString StrHelp() const override { return to_wx("字幕审校模式：进入或退出字幕审校模式"); }
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
 
 	bool IsActive(const agi::Context *c) override {
@@ -662,9 +662,9 @@ struct review_mode final : public validator_video_loaded {
 
 struct review_play_pause final : public validator_video_loaded {
 	CMD_NAME("review/play_pause")
-	STR_MENU("审校模式播放/暂停")
-	STR_DISP("审校模式播放/暂停")
-	STR_HELP("继续或暂停播放，不改变当前选中的字幕行")
+	wxString StrMenu(const agi::Context *) const override { return to_wx("审校模式播放/暂停"); }
+	wxString StrDisplay(const agi::Context *) const override { return ""; }
+	wxString StrHelp() const override { return to_wx("审校模式播放/暂停：继续或暂停播放，不改变当前选中的字幕行"); }
 
 	void operator()(agi::Context *c) override {
 		c->videoController->Play();
@@ -673,9 +673,9 @@ struct review_play_pause final : public validator_video_loaded {
 
 struct review_preview final : public validator_video_loaded {
 	CMD_NAME("review/preview")
-	STR_MENU("预览当前字幕")
-	STR_DISP("预览当前字幕")
-	STR_HELP("播放当前选中字幕及其前后各1秒的画面")
+	wxString StrMenu(const agi::Context *) const override { return to_wx("预览当前字幕"); }
+	wxString StrDisplay(const agi::Context *) const override { return ""; }
+	wxString StrHelp() const override { return to_wx("预览当前字幕：播放当前选中字幕及其前后各1秒的画面"); }
 
 	void operator()(agi::Context *c) override {
 		if (auto line = c->selectionController->GetActiveLine())

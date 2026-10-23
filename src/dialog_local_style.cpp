@@ -31,55 +31,219 @@
 #include <wx/choice.h>
 #include <wx/combobox.h>
 #include <wx/fontenum.h>
-#include <wx/intl.h>
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
 #include <wx/statbox.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 
+LocalStyleState AnalyzeLocalStylePreState(agi::Context *c, int sel_start, const AssStyle *&out_style) {
+	LocalStyleState state;
+	AssDialogue *active_line = c->selectionController->GetActiveLine();
+	if (!active_line) return state;
+
+	const AssStyle *style = c->ass->GetStyle(active_line->Style);
+	static const AssStyle default_style;
+	if (!style) style = &default_style;
+	out_style = style;
+
+	state.fs = (int)style->fontsize;
+	state.fn = style->font;
+	state.c1 = style->primary;
+	state.c2 = style->secondary;
+	state.c3 = style->outline;
+	state.c4 = style->shadow;
+	state.b = style->bold ? 1 : 0;
+	state.i = style->italic ? 1 : 0;
+	state.u = style->underline ? 1 : 0;
+	state.s = style->strikeout ? 1 : 0;
+
+	std::string full = active_line->Text.get();
+	if (sel_start > (int)full.size()) sel_start = (int)full.size();
+	if (sel_start < 0) sel_start = 0;
+
+	std::string pre_text = full.substr(0, sel_start);
+	AssDialogue temp_diag;
+	temp_diag.Text = pre_text;
+	auto blocks = temp_diag.ParseTags();
+
+	for (const auto& block : blocks) {
+		if (block->GetType() != AssBlockType::OVERRIDE) continue;
+		auto ovr = static_cast<AssDialogueBlockOverride*>(block.get());
+		for (const auto& tag : ovr->Tags) {
+			if (!tag.IsValid()) continue;
+			bool omitted = tag.Params.empty() || tag.Params[0].omitted;
+
+			if (tag.Name == "\\fs") {
+				if (omitted) {
+					state.has_fs = false;
+					state.fs = (int)style->fontsize;
+				} else {
+					state.has_fs = true;
+					state.fs = tag.Params[0].Get<int>((int)style->fontsize);
+				}
+			}
+			else if (tag.Name == "\\fn") {
+				if (omitted) {
+					state.has_fn = false;
+					state.fn = style->font;
+				} else {
+					state.has_fn = true;
+					state.fn = tag.Params[0].Get<std::string>(style->font);
+				}
+			}
+			else if (tag.Name == "\\c" || tag.Name == "\\1c") {
+				if (omitted) {
+					state.has_c1 = false;
+					state.c1 = style->primary;
+				} else {
+					state.has_c1 = true;
+					state.c1 = tag.Params[0].Get<agi::Color>(style->primary);
+				}
+			}
+			else if (tag.Name == "\\2c") {
+				if (omitted) {
+					state.has_c2 = false;
+					state.c2 = style->secondary;
+				} else {
+					state.has_c2 = true;
+					state.c2 = tag.Params[0].Get<agi::Color>(style->secondary);
+				}
+			}
+			else if (tag.Name == "\\3c") {
+				if (omitted) {
+					state.has_c3 = false;
+					state.c3 = style->outline;
+				} else {
+					state.has_c3 = true;
+					state.c3 = tag.Params[0].Get<agi::Color>(style->outline);
+				}
+			}
+			else if (tag.Name == "\\4c") {
+				if (omitted) {
+					state.has_c4 = false;
+					state.c4 = style->shadow;
+				} else {
+					state.has_c4 = true;
+					state.c4 = tag.Params[0].Get<agi::Color>(style->shadow);
+				}
+			}
+			else if (tag.Name == "\\b") {
+				if (omitted) {
+					state.has_b = false;
+					state.b = style->bold ? 1 : 0;
+				} else {
+					state.has_b = true;
+					state.b = tag.Params[0].Get<int>(style->bold ? 1 : 0);
+				}
+			}
+			else if (tag.Name == "\\i") {
+				if (omitted) {
+					state.has_i = false;
+					state.i = style->italic ? 1 : 0;
+				} else {
+					state.has_i = true;
+					state.i = tag.Params[0].Get<int>(style->italic ? 1 : 0);
+				}
+			}
+			else if (tag.Name == "\\u") {
+				if (omitted) {
+					state.has_u = false;
+					state.u = style->underline ? 1 : 0;
+				} else {
+					state.has_u = true;
+					state.u = tag.Params[0].Get<int>(style->underline ? 1 : 0);
+				}
+			}
+			else if (tag.Name == "\\s") {
+				if (omitted) {
+					state.has_s = false;
+					state.s = style->strikeout ? 1 : 0;
+				} else {
+					state.has_s = true;
+					state.s = tag.Params[0].Get<int>(style->strikeout ? 1 : 0);
+				}
+			}
+		}
+	}
+
+	return state;
+}
+
+void ApplyLocalStyleTags(agi::Context *c, int sel_start, int sel_end, const std::string &opening_tag, const std::string &closing_tag) {
+	if (opening_tag.empty() && closing_tag.empty()) return;
+
+	AssDialogue *active_line = c->selectionController->GetActiveLine();
+	if (!active_line) return;
+
+	std::string text = active_line->Text.get();
+	if (sel_start < 0) sel_start = 0;
+	if (sel_end > (int)text.size()) sel_end = (int)text.size();
+	if (sel_start > sel_end) std::swap(sel_start, sel_end);
+
+	std::string prefix = text.substr(0, sel_start);
+	std::string sel = text.substr(sel_start, sel_end - sel_start);
+	std::string suffix = text.substr(sel_end);
+
+	std::string replacement = opening_tag + sel + closing_tag;
+	active_line->Text = prefix + replacement + suffix;
+
+	c->ass->Commit(to_wx("局部样式变更"), AssFile::COMMIT_DIAG_TEXT, -1, active_line);
+	c->textSelectionController->SetSelection(sel_start, sel_start + replacement.size());
+}
+
 DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_start, int sel_end)
-: wxDialog(parent, -1, _("局部样式变更"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+: wxDialog(parent, -1, to_wx("局部样式变更"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 , context(c)
 , sel_start(sel_start)
 , sel_end(sel_end)
 {
-	AnalyzePreState();
+	const AssStyle *style = nullptr;
+	pre_state = AnalyzeLocalStylePreState(context, sel_start, style);
+
+	AssDialogue *active_line = context->selectionController->GetActiveLine();
+	if (active_line) {
+		full_text = active_line->Text.get();
+		if (this->sel_start < 0) this->sel_start = 0;
+		if (this->sel_end > (int)full_text.size()) this->sel_end = (int)full_text.size();
+		if (this->sel_start > this->sel_end) std::swap(this->sel_start, this->sel_end);
+		selected_text = full_text.substr(this->sel_start, this->sel_end - this->sel_start);
+	}
 
 	auto main_sizer = new wxBoxSizer(wxVERTICAL);
 
 	// 1. Selected text display
-	auto text_box = new wxStaticBoxSizer(wxVERTICAL, this, _("选中文本"));
+	auto text_box = new wxStaticBoxSizer(wxVERTICAL, this, to_wx("选中文本"));
 	auto text_ctrl = new wxTextCtrl(this, -1, to_wx(selected_text), wxDefaultPosition, wxDefaultSize, wxTE_READONLY);
 	text_box->Add(text_ctrl, wxSizerFlags(1).Expand().Border(wxALL, 3));
 	main_sizer->Add(text_box, wxSizerFlags().Expand().Border(wxALL, 6));
 
 	// 2. Color adjustments
-	auto color_box = new wxStaticBoxSizer(wxVERTICAL, this, _("颜色调节"));
+	auto color_box = new wxStaticBoxSizer(wxVERTICAL, this, to_wx("颜色调节"));
 	auto color_grid = new wxFlexGridSizer(2, 4, 6, 12);
 
-	chk_c1 = new wxCheckBox(this, -1, _("主体颜色 (\\c)"));
+	chk_c1 = new wxCheckBox(this, -1, to_wx("主体颜色 (\\c)"));
 	btn_c1 = new ColourButton(this, FromDIP(wxSize(38, 20)), false, pre_state.c1);
 	auto c1_sizer = new wxBoxSizer(wxHORIZONTAL);
 	c1_sizer->Add(chk_c1, wxSizerFlags().Center().Border(wxRIGHT, 5));
 	c1_sizer->Add(btn_c1, wxSizerFlags().Center());
 	color_grid->Add(c1_sizer, wxSizerFlags().CenterVertical());
 
-	chk_c3 = new wxCheckBox(this, -1, _("边框颜色 (\\3c)"));
+	chk_c3 = new wxCheckBox(this, -1, to_wx("边框颜色 (\\3c)"));
 	btn_c3 = new ColourButton(this, FromDIP(wxSize(38, 20)), false, pre_state.c3);
 	auto c3_sizer = new wxBoxSizer(wxHORIZONTAL);
 	c3_sizer->Add(chk_c3, wxSizerFlags().Center().Border(wxRIGHT, 5));
 	c3_sizer->Add(btn_c3, wxSizerFlags().Center());
 	color_grid->Add(c3_sizer, wxSizerFlags().CenterVertical());
 
-	chk_c4 = new wxCheckBox(this, -1, _("阴影颜色 (\\4c)"));
+	chk_c4 = new wxCheckBox(this, -1, to_wx("阴影颜色 (\\4c)"));
 	btn_c4 = new ColourButton(this, FromDIP(wxSize(38, 20)), false, pre_state.c4);
 	auto c4_sizer = new wxBoxSizer(wxHORIZONTAL);
 	c4_sizer->Add(chk_c4, wxSizerFlags().Center().Border(wxRIGHT, 5));
 	c4_sizer->Add(btn_c4, wxSizerFlags().Center());
 	color_grid->Add(c4_sizer, wxSizerFlags().CenterVertical());
 
-	chk_c2 = new wxCheckBox(this, -1, _("次要颜色 (\\2c)"));
+	chk_c2 = new wxCheckBox(this, -1, to_wx("次要颜色 (\\2c)"));
 	btn_c2 = new ColourButton(this, FromDIP(wxSize(38, 20)), false, pre_state.c2);
 	auto c2_sizer = new wxBoxSizer(wxHORIZONTAL);
 	c2_sizer->Add(chk_c2, wxSizerFlags().Center().Border(wxRIGHT, 5));
@@ -90,10 +254,10 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 	main_sizer->Add(color_box, wxSizerFlags().Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 6));
 
 	// 3. Font and Size
-	auto font_box = new wxStaticBoxSizer(wxVERTICAL, this, _("字体与字号"));
+	auto font_box = new wxStaticBoxSizer(wxVERTICAL, this, to_wx("字体与字号"));
 	auto font_row = new wxBoxSizer(wxHORIZONTAL);
 
-	chk_fn = new wxCheckBox(this, -1, _("字体 (\\fn):"));
+	chk_fn = new wxCheckBox(this, -1, to_wx("字体 (\\fn):"));
 	wxArrayString font_list = wxFontEnumerator::GetFacenames();
 	font_list.Sort();
 	cmb_fn = new wxComboBox(this, -1, to_wx(pre_state.fn), wxDefaultPosition, wxDefaultSize, font_list, wxCB_DROPDOWN);
@@ -102,7 +266,7 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 	font_row->Add(chk_fn, wxSizerFlags().Center().Border(wxRIGHT, 5));
 	font_row->Add(cmb_fn, wxSizerFlags(1).Center().Border(wxRIGHT, 15));
 
-	chk_fs = new wxCheckBox(this, -1, _("字号 (\\fs):"));
+	chk_fs = new wxCheckBox(this, -1, to_wx("字号 (\\fs):"));
 	spn_fs = new wxSpinCtrl(this, -1, std::to_string(pre_state.fs), wxDefaultPosition, FromDIP(wxSize(75, -1)), wxSP_ARROW_KEYS, 1, 1000, pre_state.fs);
 	spn_fs->Enable(false);
 
@@ -113,14 +277,14 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 	main_sizer->Add(font_box, wxSizerFlags().Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 6));
 
 	// 4. Style attributes (Bold, Italic, Underline, Strikeout)
-	auto style_box = new wxStaticBoxSizer(wxVERTICAL, this, _("样式效果"));
+	auto style_box = new wxStaticBoxSizer(wxVERTICAL, this, to_wx("样式效果"));
 	auto style_grid = new wxFlexGridSizer(2, 4, 6, 12);
 
 	wxArrayString bool_choices;
-	bool_choices.Add(_("开启 (1)"));
-	bool_choices.Add(_("关闭 (0)"));
+	bool_choices.Add(to_wx("开启 (1)"));
+	bool_choices.Add(to_wx("关闭 (0)"));
 
-	chk_b = new wxCheckBox(this, -1, _("粗体 (\\b):"));
+	chk_b = new wxCheckBox(this, -1, to_wx("粗体 (\\b):"));
 	cho_b = new wxChoice(this, -1, wxDefaultPosition, wxDefaultSize, bool_choices);
 	cho_b->SetSelection(pre_state.b == 0 ? 0 : 1);
 	cho_b->Enable(false);
@@ -129,7 +293,7 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 	b_sizer->Add(cho_b, wxSizerFlags().Center());
 	style_grid->Add(b_sizer, wxSizerFlags().CenterVertical());
 
-	chk_i = new wxCheckBox(this, -1, _("斜体 (\\i):"));
+	chk_i = new wxCheckBox(this, -1, to_wx("斜体 (\\i):"));
 	cho_i = new wxChoice(this, -1, wxDefaultPosition, wxDefaultSize, bool_choices);
 	cho_i->SetSelection(pre_state.i == 0 ? 0 : 1);
 	cho_i->Enable(false);
@@ -138,7 +302,7 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 	i_sizer->Add(cho_i, wxSizerFlags().Center());
 	style_grid->Add(i_sizer, wxSizerFlags().CenterVertical());
 
-	chk_u = new wxCheckBox(this, -1, _("下划线 (\\u):"));
+	chk_u = new wxCheckBox(this, -1, to_wx("下划线 (\\u):"));
 	cho_u = new wxChoice(this, -1, wxDefaultPosition, wxDefaultSize, bool_choices);
 	cho_u->SetSelection(pre_state.u == 0 ? 0 : 1);
 	cho_u->Enable(false);
@@ -147,7 +311,7 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 	u_sizer->Add(cho_u, wxSizerFlags().Center());
 	style_grid->Add(u_sizer, wxSizerFlags().CenterVertical());
 
-	chk_s = new wxCheckBox(this, -1, _("删除线 (\\s):"));
+	chk_s = new wxCheckBox(this, -1, to_wx("删除线 (\\s):"));
 	cho_s = new wxChoice(this, -1, wxDefaultPosition, wxDefaultSize, bool_choices);
 	cho_s->SetSelection(pre_state.s == 0 ? 0 : 1);
 	cho_s->Enable(false);
@@ -160,7 +324,7 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 	main_sizer->Add(style_box, wxSizerFlags().Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 6));
 
 	// 5. Preview
-	auto prev_box = new wxStaticBoxSizer(wxVERTICAL, this, _("效果预览"));
+	auto prev_box = new wxStaticBoxSizer(wxVERTICAL, this, to_wx("效果预览"));
 	preview_ctrl = new wxTextCtrl(this, -1, "", wxDefaultPosition, wxDefaultSize, wxTE_READONLY);
 	prev_box->Add(preview_ctrl, wxSizerFlags(1).Expand().Border(wxALL, 3));
 	main_sizer->Add(prev_box, wxSizerFlags().Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 6));
@@ -212,138 +376,6 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 }
 
 DialogLocalStyle::~DialogLocalStyle() = default;
-
-void DialogLocalStyle::AnalyzePreState() {
-	AssDialogue *active_line = context->selectionController->GetActiveLine();
-	if (!active_line) return;
-
-	full_text = active_line->Text.get();
-	if (sel_start < 0) sel_start = 0;
-	if (sel_end > (int)full_text.size()) sel_end = (int)full_text.size();
-	if (sel_start > sel_end) std::swap(sel_start, sel_end);
-
-	selected_text = full_text.substr(sel_start, sel_end - sel_start);
-
-	const AssStyle *style = context->ass->GetStyle(active_line->Style);
-	const AssStyle default_style;
-	if (!style) style = &default_style;
-
-	pre_state.fs = (int)style->fontsize;
-	pre_state.fn = style->font;
-	pre_state.c1 = style->primary;
-	pre_state.c2 = style->secondary;
-	pre_state.c3 = style->outline;
-	pre_state.c4 = style->shadow;
-	pre_state.b = style->bold ? 1 : 0;
-	pre_state.i = style->italic ? 1 : 0;
-	pre_state.u = style->underline ? 1 : 0;
-	pre_state.s = style->strikeout ? 1 : 0;
-
-	std::string pre_text = full_text.substr(0, sel_start);
-	AssDialogue temp_diag;
-	temp_diag.Text = pre_text;
-	auto blocks = temp_diag.ParseTags();
-
-	for (const auto& block : blocks) {
-		if (block->GetType() != AssBlockType::OVERRIDE) continue;
-		auto ovr = static_cast<AssDialogueBlockOverride*>(block.get());
-		for (const auto& tag : ovr->Tags) {
-			if (!tag.IsValid()) continue;
-			bool omitted = tag.Params.empty() || tag.Params[0].omitted;
-
-			if (tag.Name == "\\fs") {
-				if (omitted) {
-					pre_state.has_fs = false;
-					pre_state.fs = (int)style->fontsize;
-				} else {
-					pre_state.has_fs = true;
-					pre_state.fs = tag.Params[0].Get<int>((int)style->fontsize);
-				}
-			}
-			else if (tag.Name == "\\fn") {
-				if (omitted) {
-					pre_state.has_fn = false;
-					pre_state.fn = style->font;
-				} else {
-					pre_state.has_fn = true;
-					pre_state.fn = tag.Params[0].Get<std::string>(style->font);
-				}
-			}
-			else if (tag.Name == "\\c" || tag.Name == "\\1c") {
-				if (omitted) {
-					pre_state.has_c1 = false;
-					pre_state.c1 = style->primary;
-				} else {
-					pre_state.has_c1 = true;
-					pre_state.c1 = tag.Params[0].Get<agi::Color>(style->primary);
-				}
-			}
-			else if (tag.Name == "\\2c") {
-				if (omitted) {
-					pre_state.has_c2 = false;
-					pre_state.c2 = style->secondary;
-				} else {
-					pre_state.has_c2 = true;
-					pre_state.c2 = tag.Params[0].Get<agi::Color>(style->secondary);
-				}
-			}
-			else if (tag.Name == "\\3c") {
-				if (omitted) {
-					pre_state.has_c3 = false;
-					pre_state.c3 = style->outline;
-				} else {
-					pre_state.has_c3 = true;
-					pre_state.c3 = tag.Params[0].Get<agi::Color>(style->outline);
-				}
-			}
-			else if (tag.Name == "\\4c") {
-				if (omitted) {
-					pre_state.has_c4 = false;
-					pre_state.c4 = style->shadow;
-				} else {
-					pre_state.has_c4 = true;
-					pre_state.c4 = tag.Params[0].Get<agi::Color>(style->shadow);
-				}
-			}
-			else if (tag.Name == "\\b") {
-				if (omitted) {
-					pre_state.has_b = false;
-					pre_state.b = style->bold ? 1 : 0;
-				} else {
-					pre_state.has_b = true;
-					pre_state.b = tag.Params[0].Get<int>(style->bold ? 1 : 0);
-				}
-			}
-			else if (tag.Name == "\\i") {
-				if (omitted) {
-					pre_state.has_i = false;
-					pre_state.i = style->italic ? 1 : 0;
-				} else {
-					pre_state.has_i = true;
-					pre_state.i = tag.Params[0].Get<int>(style->italic ? 1 : 0);
-				}
-			}
-			else if (tag.Name == "\\u") {
-				if (omitted) {
-					pre_state.has_u = false;
-					pre_state.u = style->underline ? 1 : 0;
-				} else {
-					pre_state.has_u = true;
-					pre_state.u = tag.Params[0].Get<int>(style->underline ? 1 : 0);
-				}
-			}
-			else if (tag.Name == "\\s") {
-				if (omitted) {
-					pre_state.has_s = false;
-					pre_state.s = style->strikeout ? 1 : 0;
-				} else {
-					pre_state.has_s = true;
-					pre_state.s = tag.Params[0].Get<int>(style->strikeout ? 1 : 0);
-				}
-			}
-		}
-	}
-}
 
 std::string DialogLocalStyle::GetOpeningTag() const {
 	std::string tags;
@@ -462,21 +494,5 @@ void DialogLocalStyle::UpdatePreview() {
 void DialogLocalStyle::Apply() {
 	std::string opening = GetOpeningTag();
 	std::string closing = GetClosingTag();
-	if (opening.empty() && closing.empty()) return;
-
-	AssDialogue *active_line = context->selectionController->GetActiveLine();
-	if (!active_line) return;
-
-	std::string text = active_line->Text.get();
-	if (sel_start < 0 || sel_end > (int)text.size() || sel_start > sel_end) return;
-
-	std::string prefix = text.substr(0, sel_start);
-	std::string sel = text.substr(sel_start, sel_end - sel_start);
-	std::string suffix = text.substr(sel_end);
-
-	std::string replacement = opening + sel + closing;
-	active_line->Text = prefix + replacement + suffix;
-
-	context->ass->Commit(_("local style change"), AssFile::COMMIT_DIAG_TEXT, -1, active_line);
-	context->textSelectionController->SetSelection(sel_start, sel_start + replacement.size());
+	ApplyLocalStyleTags(context, sel_start, sel_end, opening, closing);
 }

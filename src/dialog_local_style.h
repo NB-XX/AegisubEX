@@ -24,10 +24,46 @@ class wxSpinCtrl;
 class wxChoice;
 class wxTextCtrl;
 class ColourButton;
+class AssStyle;
 
 namespace agi {
 	struct Context;
 }
+
+struct LocalStyleState {
+	bool has_fs = false;
+	int fs = 0;
+
+	bool has_fn = false;
+	std::string fn;
+
+	bool has_c1 = false;
+	agi::Color c1;
+
+	bool has_c2 = false;
+	agi::Color c2;
+
+	bool has_c3 = false;
+	agi::Color c3;
+
+	bool has_c4 = false;
+	agi::Color c4;
+
+	bool has_b = false;
+	int b = 0;
+
+	bool has_i = false;
+	int i = 0;
+
+	bool has_u = false;
+	int u = 0;
+
+	bool has_s = false;
+	int s = 0;
+};
+
+LocalStyleState AnalyzeLocalStylePreState(agi::Context *c, int sel_start, const AssStyle *&out_style);
+void ApplyLocalStyleTags(agi::Context *c, int sel_start, int sel_end, const std::string &opening_tag, const std::string &closing_tag);
 
 /// Dialog for adjusting style tags for a selected range of text without affecting surrounding text
 class DialogLocalStyle final : public wxDialog {
@@ -36,38 +72,7 @@ class DialogLocalStyle final : public wxDialog {
 	int sel_end;
 	std::string selected_text;
 	std::string full_text;
-
-	struct StyleState {
-		bool has_fs = false;
-		int fs = 0;
-
-		bool has_fn = false;
-		std::string fn;
-
-		bool has_c1 = false;
-		agi::Color c1;
-
-		bool has_c2 = false;
-		agi::Color c2;
-
-		bool has_c3 = false;
-		agi::Color c3;
-
-		bool has_c4 = false;
-		agi::Color c4;
-
-		bool has_b = false;
-		int b = 0;
-
-		bool has_i = false;
-		int i = 0;
-
-		bool has_u = false;
-		int u = 0;
-
-		bool has_s = false;
-		int s = 0;
-	} pre_state;
+	LocalStyleState pre_state;
 
 	// Controls
 	wxCheckBox *chk_c1 = nullptr;
@@ -102,7 +107,6 @@ class DialogLocalStyle final : public wxDialog {
 
 	wxTextCtrl *preview_ctrl = nullptr;
 
-	void AnalyzePreState();
 	void UpdatePreview();
 
 public:
