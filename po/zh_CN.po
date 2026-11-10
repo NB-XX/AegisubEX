@@ -19,6 +19,27 @@ msgstr ""
 msgid "Frame Match Assistant"
 msgstr "对帧辅助"
 
+msgid "Match Engine:"
+msgstr "对帧引擎："
+
+msgid "Auto (SubtitleOCR -> DBNet -> Classic)"
+msgstr "自动选择 (望言OCR -> DBNet -> 经典原生)"
+
+msgid "SubtitleOCR External Engine (望言OCR)"
+msgstr "望言 OCR 外部引擎 (SubtitleOCR)"
+
+msgid "Native DBNet Neural Matcher (内置深度学习)"
+msgstr "内置 DBNet 神经网络对帧"
+
+msgid "Classic Native Pixel Matcher (经典原生像素/Dice)"
+msgstr "经典原生像素/Dice 掩模对帧"
+
+msgid "SubtitleOCR Path:"
+msgstr "望言OCR 路径："
+
+msgid "Select SubtitleOCR (望言OCR) Directory"
+msgstr "选择望言OCR (SubtitleOCR) 所在目录"
+
 msgid "Frame Match"
 msgstr "对帧"
 

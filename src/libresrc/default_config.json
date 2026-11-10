@@ -454,6 +454,8 @@
 			"Review Smooth Preview" : true
 		},
 		"Frame Match" : {
+			"Engine" : 0,
+			"SubtitleOCR Path" : "D:/Tool/SubtitleOCR_Community_v3.1.2/望言OCR_v3.1.2",
 			"Minimum Similarity" : 70,
 			"Rerun Step" : 15,
 			"Region X0" : -1.0,

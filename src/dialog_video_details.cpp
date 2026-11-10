@@ -37,7 +37,10 @@
 #include <libaegisub/ass/time.h>
 
 #include <boost/rational.hpp>
+#include <wx/button.h>
+#include <wx/choice.h>
 #include <wx/dialog.h>
+#include <wx/dirdlg.h>
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
 #include <wx/statbox.h>
@@ -75,14 +78,47 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 
 	video_sizer->Add(fg);
 
-	auto frame_match_sizer = new wxStaticBoxSizer(wxHORIZONTAL, &d, _("Frame Match Assistant"));
+	auto frame_match_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, _("Frame Match Assistant"));
 	auto frame_match_box = frame_match_sizer->GetStaticBox();
-	frame_match_sizer->Add(new wxStaticText(frame_match_box, -1, _("Minimum region similarity (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
-	auto minimum_similarity = new wxSpinCtrl(frame_match_box, -1, wxEmptyString, wxDefaultPosition, wxSize(90, -1), wxSP_ARROW_KEYS, 50, 95, OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt());
-	frame_match_sizer->Add(minimum_similarity, 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 12);
-	frame_match_sizer->Add(new wxStaticText(frame_match_box, -1, _("Rerun similarity step (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
-	auto rerun_step = new wxSpinCtrl(frame_match_box, -1, wxEmptyString, wxDefaultPosition, wxSize(90, -1), wxSP_ARROW_KEYS, 5, 30, OPT_GET("Tool/Frame Match/Rerun Step")->GetInt());
-	frame_match_sizer->Add(rerun_step, 0, wxALIGN_CENTRE_VERTICAL);
+
+	// 1. Engine Choice
+	auto engine_row = new wxBoxSizer(wxHORIZONTAL);
+	engine_row->Add(new wxStaticText(frame_match_box, -1, _("Match Engine:")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	wxArrayString engine_choices;
+	engine_choices.Add(_("Auto (SubtitleOCR -> DBNet -> Classic)"));
+	engine_choices.Add(_("SubtitleOCR External Engine (望言OCR)"));
+	engine_choices.Add(_("Native DBNet Neural Matcher (内置深度学习)"));
+	engine_choices.Add(_("Classic Native Pixel Matcher (经典原生像素/Dice)"));
+	auto engine_choice = new wxChoice(frame_match_box, -1, wxDefaultPosition, wxDefaultSize, engine_choices);
+	int cur_engine = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 3));
+	engine_choice->SetSelection(cur_engine);
+	engine_row->Add(engine_choice, 1, wxALIGN_CENTRE_VERTICAL);
+	frame_match_sizer->Add(engine_row, 0, wxEXPAND | wxALL, 4);
+
+	// 2. SubtitleOCR Path
+	auto path_row = new wxBoxSizer(wxHORIZONTAL);
+	path_row->Add(new wxStaticText(frame_match_box, -1, _("SubtitleOCR Path:")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	auto subocr_path_ctrl = new wxTextCtrl(frame_match_box, -1, to_wx(OPT_GET("Tool/Frame Match/SubtitleOCR Path")->GetString()));
+	path_row->Add(subocr_path_ctrl, 1, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 5);
+	auto browse_btn = new wxButton(frame_match_box, -1, _("Browse..."), wxDefaultPosition, wxSize(70, -1));
+	browse_btn->Bind(wxEVT_BUTTON, [&d, subocr_path_ctrl](wxCommandEvent&) {
+		wxDirDialog dlg(&d, _("Select SubtitleOCR (望言OCR) Directory"), subocr_path_ctrl->GetValue());
+		if (dlg.ShowModal() == wxID_OK) {
+			subocr_path_ctrl->SetValue(dlg.GetPath());
+		}
+	});
+	path_row->Add(browse_btn, 0, wxALIGN_CENTRE_VERTICAL);
+	frame_match_sizer->Add(path_row, 0, wxEXPAND | wxALL, 4);
+
+	// 3. Similarity & Rerun step
+	auto sim_row = new wxBoxSizer(wxHORIZONTAL);
+	sim_row->Add(new wxStaticText(frame_match_box, -1, _("Minimum region similarity (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	auto minimum_similarity = new wxSpinCtrl(frame_match_box, -1, wxEmptyString, wxDefaultPosition, wxSize(70, -1), wxSP_ARROW_KEYS, 50, 95, OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt());
+	sim_row->Add(minimum_similarity, 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 15);
+	sim_row->Add(new wxStaticText(frame_match_box, -1, _("Rerun similarity step (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	auto rerun_step = new wxSpinCtrl(frame_match_box, -1, wxEmptyString, wxDefaultPosition, wxSize(70, -1), wxSP_ARROW_KEYS, 5, 30, OPT_GET("Tool/Frame Match/Rerun Step")->GetInt());
+	sim_row->Add(rerun_step, 0, wxALIGN_CENTRE_VERTICAL);
+	frame_match_sizer->Add(sim_row, 0, wxEXPAND | wxALL, 4);
 
 	auto main_sizer = new wxBoxSizer(wxVERTICAL);
 	main_sizer->Add(video_sizer, 1, wxALL|wxEXPAND, 5);
@@ -93,6 +129,8 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 	d.CenterOnParent();
 	if (d.ShowModal() == wxID_OK)
 	{
+		OPT_SET("Tool/Frame Match/Engine")->SetInt(engine_choice->GetSelection());
+		OPT_SET("Tool/Frame Match/SubtitleOCR Path")->SetString(from_wx(subocr_path_ctrl->GetValue()));
 		OPT_SET("Tool/Frame Match/Minimum Similarity")->SetInt(minimum_similarity->GetValue());
 		OPT_SET("Tool/Frame Match/Rerun Step")->SetInt(rerun_step->GetValue());
 	}
