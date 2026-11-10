@@ -207,13 +207,15 @@ agi::fs::path FFmpegSourceProvider::GetCacheFilename(agi::fs::path const& filena
 	// Get the size of the file to be hashed
 	uintmax_t len = agi::fs::Size(filename);
 
-	// Get the hash of the filename
+	// collapse ../ so the same file reached via different relative paths shares one index
+	auto key = filename.lexically_normal().string();
+
 	boost::crc_32_type hash;
-	hash.process_bytes(filename.string().c_str(), filename.string().size());
+	hash.process_bytes(key.c_str(), key.size());
 
 	// Generate the filename
 	auto modified_time = std::chrono::duration_cast<std::chrono::seconds>(agi::fs::ModifiedTime(filename).time_since_epoch()).count();
-	auto result = config::path->Decode(agi::Str("?local/ffms2cache/", std::to_string(hash.checksum()), "_", std::to_string(len), "_", std::to_string(modified_time), ".ffindex"));
+	auto result = config::path->Decode(agi::Str("?cache/ffms2cache/", std::to_string(hash.checksum()), "_", std::to_string(len), "_", std::to_string(modified_time), ".ffindex"));
 
 	// Ensure that folder exists
 	agi::fs::CreateDirectory(result.parent_path());
@@ -222,7 +224,7 @@ agi::fs::path FFmpegSourceProvider::GetCacheFilename(agi::fs::path const& filena
 }
 
 void FFmpegSourceProvider::CleanCache() {
-	::CleanCache(config::path->Decode("?local/ffms2cache/"),
+	::CleanCache(config::path->Decode("?cache/ffms2cache/"),
 		"*.ffindex",
 		OPT_GET("Provider/FFmpegSource/Cache/Size")->GetInt(),
 		OPT_GET("Provider/FFmpegSource/Cache/Files")->GetInt());

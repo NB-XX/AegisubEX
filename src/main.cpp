@@ -102,11 +102,11 @@ AegisubApp::AegisubApp() {
 	// Fallback to X11 if wxGTK implementation is build without Wayland EGL support
 	// Fix https://github.com/TypesettingTools/Aegisub/issues/233
 	#if defined(__WXGTK__) && !wxUSE_GLCANVAS_EGL && !wxHAS_EGL
-		wxString xdg_session_type = wxGetenv("XDG_SESSION_TYPE");
-		wxString wayland_display  = wxGetenv("WAYLAND_DISPLAY");
-		wxString gdk_backend  = wxGetenv("GDK_BACKEND");	// Do not override GDK_BACKEND if it's already manually set
+		std::string xdg_session_type = agi::util::GetEnv("XDG_SESSION_TYPE").value_or("");
+		std::string wayland_display  = agi::util::GetEnv("WAYLAND_DISPLAY").value_or("");
+		std::string gdk_backend  = agi::util::GetEnv("GDK_BACKEND").value_or("");	// Do not override GDK_BACKEND if it's already manually set
 
-		if ((xdg_session_type == "wayland" || wayland_display.Contains("wayland")) && gdk_backend != "x11") {
+		if ((xdg_session_type == "wayland" || wayland_display.find("wayland") != std::string::npos) && gdk_backend != "x11") {
 			printf("Warning: Running on Wayland, but wxWidgets is not compiled with EGL support.");
 			if (gdk_backend.empty()) {
 				printf(" Falling back to X11.");
@@ -175,19 +175,24 @@ bool AegisubApp::OnInit() {
 
 		// Local config, make ?user mean ?data so all user settings are placed in install dir
 		config::path->SetToken("?user", config::path->Decode("?data"));
-		config::path->SetToken("?local", config::path->Decode("?data"));
+		config::path->SetToken("?cache", config::path->Decode("?data"));
+		config::path->SetToken("?state", config::path->Decode("?data"));
 	} catch (agi::fs::FileSystemError const&) {
 		// File doesn't exist or we can't read it
 		// Might be worth displaying an error in the second case
 	}
 #endif
-	crash_writer::Initialize(config::path->Decode("?user"));
+	crash_writer::Initialize(config::path->Decode("?state"));
 
 	StartupLog("Create log writer");
-	auto path_log = config::path->Decode("?user/log/");
-	agi::fs::CreateDirectory(path_log);
+	auto path_log = config::path->Decode("?state/log/");
 	agi::log::log->Subscribe(std::make_unique<agi::log::JsonEmitter>(path_log));
 	CleanCache(path_log, "*.json", 10, 100);
+
+	LOG_D("path/init") << "Filled platform paths:";
+	for (auto const token : { "?data", "?user", "?state", "?cache", "?dictionary" }) {
+		LOG_D("path/init") << agi::format("  %s = %s", token, config::path->Decode(token).string());
+	}
 
 	StartupLog("Load user configuration");
 	try {
@@ -223,7 +228,7 @@ bool AegisubApp::OnInit() {
 	hotkey::init();
 
 	StartupLog("Load MRU");
-	config::mru = new agi::MRUManager(config::path->Decode("?user/mru.json"), GET_DEFAULT_CONFIG(default_mru), config::opt);
+	config::mru = new agi::MRUManager(config::path->Decode("?state/mru.json"), GET_DEFAULT_CONFIG(default_mru), config::opt);
 
 	agi::util::SetThreadName("AegiMain");
 
@@ -398,7 +403,7 @@ void AegisubApp::UnhandledException([[maybe_unused]] bool stackWalk) {
 		auto c = frame->context.get();
 		if (!c || !c->ass || !c->subsController) continue;
 
-		path = config::path->Decode("?user/recovered");
+		path = config::path->Decode("?state/recovered");
 		agi::fs::CreateDirectory(path);
 
 		auto filename = c->subsController->Filename().stem();
