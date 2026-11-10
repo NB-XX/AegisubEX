@@ -377,6 +377,7 @@ bool MatchLineDBNetNeural(agi::Context *c, AssDialogue *line, PixelRegion region
 	const std::function<bool(int samples)>& on_sample = nullptr, int* status = nullptr,
 	int chain_hint_frame = -1) {
 	auto set_status = [&](int s) { if (status) *status = s; };
+	try {
 	if (!DBNetDetector::Get().IsAvailable()) {
 		set_status(kMatchNoPattern);
 		return false;
@@ -527,6 +528,11 @@ bool MatchLineDBNetNeural(agi::Context *c, AssDialogue *line, PixelRegion region
 	if (new_end <= new_start) { set_status(kMatchInvalid); return false; }
 	set_status(kMatchOk);
 	return true;
+	}
+	catch (...) {
+		set_status(kMatchNoPattern);
+		return false;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -537,13 +543,13 @@ bool MatchLineToRegion(agi::Context *c, AssDialogue *line, PixelRegion region, i
 	const std::function<bool(int samples)>& on_sample = nullptr, int* status = nullptr, MaskCache* shared_cache = nullptr,
 	int chain_hint_frame = -1) {
 	int engine_mode = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 3));
-	// 0: Auto (SubtitleOCR -> DBNet -> Classic)
+	// 0: Auto (DBNet -> Classic; SubtitleOCR if available)
 	// 1: SubtitleOCR External Engine (望言OCR)
 	// 2: Native DBNet Neural Matcher
 	// 3: Classic Native Pixel Matcher
 
-	// 模式 1: 望言 OCR (SubtitleOCR C-ABI 引擎)
-	if (engine_mode == 1 || engine_mode == 0) {
+	// 模式 1: 望言 OCR (SubtitleOCR C-ABI 引擎，仅当明确可用或用户显式指定时尝试)
+	if (engine_mode == 1 || (engine_mode == 0 && SubocrEngine::Get().IsAvailable())) {
 		std::string v_path = c->project->VideoName().string();
 		if (!v_path.empty()) {
 			std::string custom_subocr_dir = OPT_GET("Tool/Frame Match/SubtitleOCR Path")->GetString();

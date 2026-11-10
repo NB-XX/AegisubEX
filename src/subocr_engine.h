@@ -95,19 +95,6 @@ public:
 	                      std::vector<std::pair<int, int>>& out_intervals,
 	                      const std::function<bool(double progress, double speed)>& progress_cb = nullptr);
 
-private:
-	SubocrEngine();
-	~SubocrEngine();
-
-	bool m_available = false;
-	std::wstring m_loaded_path;
-
-#ifdef _WIN32
-	HMODULE m_hLib = nullptr;
-#else
-	void* m_hLib = nullptr;
-#endif
-
 	// C-ABI 函数指针
 	typedef void* (*Fn_subocr_init)(const char* pathResources, int device);
 	typedef void (*Fn_subocr_deinit)(void* ctx);
@@ -122,6 +109,19 @@ private:
 	// 内存释放辅助指针
 	typedef void (*Fn_free_array)(void* array);
 	typedef SubocrArray<SubocrSubtitleAnchor> (*Fn_anchor_malloc)(size_t size);
+
+private:
+	SubocrEngine();
+	~SubocrEngine();
+
+	bool m_available = false;
+	std::wstring m_loaded_path;
+
+#ifdef _WIN32
+	HMODULE m_hLib = nullptr;
+#else
+	void* m_hLib = nullptr;
+#endif
 
 	Fn_subocr_init fn_init = nullptr;
 	Fn_subocr_deinit fn_deinit = nullptr;
