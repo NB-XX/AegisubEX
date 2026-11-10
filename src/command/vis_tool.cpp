@@ -28,6 +28,8 @@
 #include "../visual_tool_rotatez.h"
 #include "../visual_tool_scale.h"
 #include "../visual_tool_timing_region.h"
+#include "../visual_tool_motion_track.h"
+#include "../dialog_motion_tracker.h"
 #include "../visual_tool_vector_clip.h"
 
 
@@ -146,6 +148,39 @@ namespace {
 		void operator()(agi::Context *c) override { VisualToolTimingRegion::BatchMatchSelection(c); }
 	};
 
+	struct visual_mode_motion_track final : public visual_tool_command<VisualToolMotionTrack> {
+		CMD_NAME("video/tool/motion_track")
+		wxString StrMenu(const agi::Context *) const override { return to_wx("运动追踪选框"); }
+		wxString StrDisplay(const agi::Context *) const override { return to_wx("运动追踪"); }
+		wxString StrHelp() const override { return to_wx("在视频画面上拖拽框选花字目标，框选后自动弹出运动追踪确认与生成面板"); }
+
+		wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
+			static const char svg[] =
+				"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">"
+				"<path d=\"M4 18 C8 18 8 8 16 8\" fill=\"none\" stroke=\"#E67E22\" stroke-width=\"2\" stroke-dasharray=\"2,2\"/>"
+				"<circle cx=\"4\" cy=\"18\" r=\"2\" fill=\"#E67E22\"/>"
+				"<circle cx=\"16\" cy=\"8\" r=\"5\" fill=\"none\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
+				"<line x1=\"16\" y1=\"1\" x2=\"16\" y2=\"5\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
+				"<line x1=\"16\" y1=\"11\" x2=\"16\" y2=\"15\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
+				"<line x1=\"9\" y1=\"8\" x2=\"13\" y2=\"8\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
+				"<line x1=\"19\" y1=\"8\" x2=\"23\" y2=\"8\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
+				"<circle cx=\"16\" cy=\"8\" r=\"1.5\" fill=\"#E74C3C\"/>"
+				"</svg>";
+			return wxBitmapBundle::FromSVG(svg, wxSize(height, height));
+		}
+
+		void operator()(agi::Context *c) override {
+			if (c->videoDisplay->ToolIsType(typeid(VisualToolMotionTrack)))
+				c->videoDisplay->SetTool(std::make_unique<VisualToolCross>(c->videoDisplay, c));
+			else {
+				VisualToolMotionTrack::SetBoxFinishedCallback([](agi::Context* ctx) {
+					ShowMotionTrackerDialog(ctx);
+				});
+				c->videoDisplay->SetTool(std::make_unique<VisualToolMotionTrack>(c->videoDisplay, c));
+			}
+		}
+	};
+
 	struct visual_mode_vector_clip final : public visual_tool_command<VisualToolVectorClip> {
 		CMD_NAME("video/tool/vector_clip")
 		CMD_ICON(visual_vector_clip)
@@ -225,6 +260,7 @@ namespace cmd {
 		reg(std::make_unique<visual_mode_clip>());
 		reg(std::make_unique<visual_mode_timing_region>());
 		reg(std::make_unique<batch_frame_match>());
+		reg(std::make_unique<visual_mode_motion_track>());
 		reg(std::make_unique<visual_mode_vector_clip>());
 
 		reg(std::make_unique<visual_mode_vclip_drag>());

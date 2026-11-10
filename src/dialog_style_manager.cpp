@@ -66,6 +66,9 @@
 #include <wx/fontenum.h>
 #include <wx/intl.h>
 #include <wx/listbox.h>
+#ifdef __WXMSW__
+#include <wx/msw/dc.h>
+#endif
 #include <wx/msgdlg.h>
 #include <wx/radiobox.h>
 #include <wx/sizer.h>
@@ -76,6 +79,262 @@
 #include <wx/choicdlg.h> // Keep this last so wxUSE_CHOICEDLG is set.
 
 namespace {
+class StyleListBox final : public wxListBox {
+	bool preview_mode = false;
+	std::function<const AssStyle*(std::string const&)> style_getter;
+
+public:
+	StyleListBox(wxWindow *parent, wxWindowID id, const wxPoint& pos, const wxSize& size,
+	             long style, std::function<const AssStyle*(std::string const&)> getter)
+	: wxListBox(parent, id, pos, size, 0, nullptr, style | wxLB_OWNERDRAW)
+	, style_getter(std::move(getter))
+	{
+	}
+
+	void SetPreviewMode(bool enable) {
+		if (preview_mode == enable) return;
+		preview_mode = enable;
+		EnsureItemHeights();
+		Refresh();
+		Update();
+	}
+
+	bool GetPreviewMode() const { return preview_mode; }
+
+	void EnsureItemHeights() {
+#ifdef __WXMSW__
+		if (GetHWND()) {
+			int item_h = preview_mode ? FromDIP(48) : FromDIP(20);
+			::SendMessage((HWND)GetHWND(), LB_SETITEMHEIGHT, 0, (LPARAM)item_h);
+			::SetWindowPos((HWND)GetHWND(), nullptr, 0, 0, 0, 0,
+				SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+		}
+#endif
+	}
+
+	const AssStyle *GetStyleFor(size_t idx) const {
+		if (idx >= (size_t)GetCount() || !style_getter) return nullptr;
+		return style_getter(from_wx(GetString(idx)));
+	}
+
+#ifdef __WXMSW__
+	bool MSWOnMeasure(WXMEASUREITEMSTRUCT *item) override {
+		MEASUREITEMSTRUCT *pStruct = (MEASUREITEMSTRUCT *)item;
+		pStruct->itemHeight = preview_mode ? FromDIP(48) : FromDIP(20);
+		pStruct->itemWidth = FromDIP(240);
+		return true;
+	}
+
+	bool MSWOnDraw(WXDRAWITEMSTRUCT *item) override;
+#endif
+
+protected:
+	int DoInsertItems(const wxArrayStringsAdapter& items,
+	                  unsigned int pos,
+	                  void **clientData, wxClientDataType type) override {
+		int ret = wxListBox::DoInsertItems(items, pos, clientData, type);
+		EnsureItemHeights();
+		return ret;
+	}
+};
+
+#ifdef __WXMSW__
+bool StyleListBox::MSWOnDraw(WXDRAWITEMSTRUCT *item) {
+	DRAWITEMSTRUCT *pStruct = (DRAWITEMSTRUCT *)item;
+	if (pStruct->itemID == (UINT)-1)
+		return false;
+
+	size_t idx = pStruct->itemID;
+	if (idx >= (size_t)GetCount())
+		return false;
+
+	RECT rcItem = pStruct->rcItem;
+	HDC hdc = pStruct->hDC;
+	bool is_selected = (pStruct->itemState & ODS_SELECTED) != 0;
+	bool has_focus = (pStruct->itemState & ODS_FOCUS) != 0;
+
+	wxDCTemp dc((WXHDC)hdc);
+	wxRect rect(rcItem.left, rcItem.top, rcItem.right - rcItem.left, rcItem.bottom - rcItem.top);
+	if (rect.width <= 0 || rect.height <= 0)
+		return true;
+
+	if (!preview_mode) {
+		wxColour bg_col = is_selected ? wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)
+		                              : wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
+		wxColour fg_col = is_selected ? wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT)
+		                              : wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+
+		dc.SetBrush(wxBrush(bg_col));
+		dc.SetPen(*wxTRANSPARENT_PEN);
+		dc.DrawRectangle(rect);
+
+		dc.SetFont(GetFont());
+		dc.SetTextForeground(fg_col);
+		dc.SetBackgroundMode(wxBRUSHSTYLE_TRANSPARENT);
+
+		wxString text = GetString(idx);
+		dc.DrawText(text, rect.x + FromDIP(4), rect.y + (rect.height - dc.GetCharHeight()) / 2);
+
+		if (has_focus && (pStruct->itemState & ODS_NOFOCUSRECT) == 0) {
+			::DrawFocusRect(hdc, &rcItem);
+		}
+		return true;
+	}
+
+	// Preview Mode
+	const AssStyle *s = GetStyleFor(idx);
+	wxString style_name = GetString(idx);
+
+	// 1. Draw row background
+	wxColour row_bg = is_selected ? wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT)
+	                              : ((idx % 2 == 0) ? wxColour(255, 255, 255) : wxColour(248, 249, 251));
+	wxColour text_name = is_selected ? wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT)
+	                                 : wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+	wxColour text_sub = is_selected ? wxColour(230, 235, 255) : wxColour(110, 115, 125);
+
+	dc.SetBrush(wxBrush(row_bg));
+	dc.SetPen(*wxTRANSPARENT_PEN);
+	dc.DrawRectangle(rect);
+
+	if (!is_selected) {
+		dc.SetPen(wxPen(wxColour(232, 234, 238)));
+		dc.DrawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width, rect.y + rect.height - 1);
+	}
+
+	// 2. Left side: Style Name + Font info
+	int left_padding = FromDIP(6);
+	int info_width = FromDIP(90);
+
+	wxFont name_font = GetFont();
+	name_font.SetWeight(wxFONTWEIGHT_BOLD);
+	dc.SetFont(name_font);
+	dc.SetTextForeground(text_name);
+	dc.SetBackgroundMode(wxBRUSHSTYLE_TRANSPARENT);
+
+	wxString disp_name = style_name;
+	int max_name_w = info_width - FromDIP(4);
+	if (dc.GetTextExtent(disp_name).GetWidth() > max_name_w) {
+		while (!disp_name.empty() && dc.GetTextExtent(disp_name + "...").GetWidth() > max_name_w)
+			disp_name.RemoveLast();
+		disp_name += "...";
+	}
+	dc.DrawText(disp_name, rect.x + left_padding, rect.y + FromDIP(5));
+
+	// Sub info (font family + size)
+	wxFont sub_font = GetFont();
+	sub_font.SetPointSize(std::max(7, sub_font.GetPointSize() - 2));
+	dc.SetFont(sub_font);
+	dc.SetTextForeground(text_sub);
+
+	wxString sub_info = s ? wxString::Format("%s %gpt", to_wx(s->font), s->fontsize) : wxString();
+	if (dc.GetTextExtent(sub_info).GetWidth() > max_name_w) {
+		while (!sub_info.empty() && dc.GetTextExtent(sub_info + "...").GetWidth() > max_name_w)
+			sub_info.RemoveLast();
+		sub_info += "...";
+	}
+	dc.DrawText(sub_info, rect.x + left_padding, rect.y + FromDIP(26));
+
+	// 3. Right side: Actual Subtitle Visual Preview Swatch
+	int swatch_x = rect.x + left_padding + info_width + FromDIP(4);
+	int swatch_y = rect.y + FromDIP(4);
+	int swatch_w = rect.width - (swatch_x - rect.x) - FromDIP(6);
+	int swatch_h = rect.height - FromDIP(8);
+
+	if (swatch_w > FromDIP(40) && swatch_h > FromDIP(10)) {
+		wxRect swatch_rect(swatch_x, swatch_y, swatch_w, swatch_h);
+
+		wxColour preview_bg(125, 153, 176);
+		try {
+			preview_bg = to_wx(OPT_GET("Colour/Style Editor/Background/Preview")->GetColor());
+		} catch (...) {}
+
+		dc.SetBrush(wxBrush(preview_bg));
+		dc.SetPen(wxPen(is_selected ? wxColour(255, 255, 255) : wxColour(85, 110, 130)));
+		dc.DrawRoundedRectangle(swatch_rect, FromDIP(3));
+
+		if (s) {
+			int font_pt = std::clamp((int)(s->fontsize * 0.30), FromDIP(10), FromDIP(18));
+			wxFont preview_font(wxFontInfo(font_pt)
+				.FaceName(to_wx(s->font))
+				.Bold(s->bold)
+				.Italic(s->italic)
+				.Underlined(s->underline)
+				.Strikethrough(s->strikeout));
+
+			if (!preview_font.IsOk())
+				preview_font = wxFont(wxFontInfo(font_pt).Bold(s->bold).Italic(s->italic));
+
+			dc.SetFont(preview_font);
+			dc.SetClippingRegion(swatch_rect.Deflate(FromDIP(2)));
+
+			wxString sample = style_name;
+			if (sample.size() <= 6 && sample.IsAscii())
+				sample += to_wx(" 示例");
+
+			wxSize text_sz = dc.GetTextExtent(sample);
+			if (text_sz.GetWidth() > swatch_w - FromDIP(8)) {
+				sample = style_name;
+				text_sz = dc.GetTextExtent(sample);
+			}
+			if (text_sz.GetWidth() > swatch_w - FromDIP(8)) {
+				while (!sample.empty() && dc.GetTextExtent(sample + "...").GetWidth() > swatch_w - FromDIP(8))
+					sample.RemoveLast();
+				sample += "...";
+				text_sz = dc.GetTextExtent(sample);
+			}
+
+			int tx = swatch_x + (swatch_w - text_sz.GetWidth()) / 2;
+			int ty = swatch_y + (swatch_h - text_sz.GetHeight()) / 2;
+			if (tx < swatch_x + FromDIP(4))
+				tx = swatch_x + FromDIP(4);
+
+			wxColour col_pri = to_wx(s->primary);
+			wxColour col_out = to_wx(s->outline);
+			wxColour col_shd = to_wx(s->shadow);
+
+			// 3a. Opaque box
+			if (s->borderstyle == 3) {
+				wxRect box_rect(tx - FromDIP(3), ty - FromDIP(1), text_sz.GetWidth() + FromDIP(6), text_sz.GetHeight() + FromDIP(2));
+				dc.SetBrush(wxBrush(col_out));
+				dc.SetPen(*wxTRANSPARENT_PEN);
+				dc.DrawRectangle(box_rect);
+			}
+
+			// 3b. Shadow
+			if (s->shadow_w > 0.05) {
+				int so = (s->shadow_w >= 2.5) ? 2 : 1;
+				dc.SetTextForeground(col_shd);
+				dc.DrawText(sample, tx + so, ty + so);
+			}
+
+			// 3c. Outline
+			if (s->borderstyle != 3 && s->outline_w > 0.05) {
+				int r = (s->outline_w >= 2.5) ? 2 : 1;
+				dc.SetTextForeground(col_out);
+				for (int dx = -r; dx <= r; ++dx) {
+					for (int dy = -r; dy <= r; ++dy) {
+						if (dx != 0 || dy != 0) {
+							dc.DrawText(sample, tx + dx, ty + dy);
+						}
+					}
+				}
+			}
+
+			// 3d. Primary Fill
+			dc.SetTextForeground(col_pri);
+			dc.DrawText(sample, tx, ty);
+
+			dc.DestroyClippingRegion();
+		}
+	}
+
+	if (has_focus && (pStruct->itemState & ODS_NOFOCUSRECT) == 0) {
+		::DrawFocusRect(hdc, &rcItem);
+	}
+	return true;
+}
+#endif
+
 class DialogStyleManager final : public wxDialog {
 	agi::Context *c; ///< Project context
 	std::unique_ptr<PersistLocation> persist;
@@ -92,10 +351,11 @@ class DialogStyleManager final : public wxDialog {
 	AssStyleStorage Store;
 
 	wxComboBox *CatalogList;
-	wxListBox *StorageList;
-	wxListBox *CurrentList;
+	StyleListBox *StorageList;
+	StyleListBox *CurrentList;
 
 	wxButton *CatalogDelete;
+	wxButton *TogglePreview;
 
 	wxButton *MoveToLocal;
 	wxButton *MoveToStorage;
@@ -259,7 +519,7 @@ int get_single_sel(wxListBox *lb) {
 }
 
 DialogStyleManager::DialogStyleManager(agi::Context *context)
-: wxDialog(context->parent, -1, _("Styles Manager"))
+: wxDialog(context->parent, -1, _("Styles Manager"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 , c(context)
 , commit_connection(c->ass->AddCommitListener(&DialogStyleManager::LoadCurrentStyles, this))
 , active_line_connection(c->selectionController->AddActiveLineListener(&DialogStyleManager::OnActiveLineChanged, this))
@@ -285,15 +545,20 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 	CatalogList = new wxComboBox(CatalogSizerBox,-1, "", wxDefaultPosition, wxSize(-1,-1), 0, nullptr, wxCB_READONLY);
 	wxButton *CatalogNew = new wxButton(CatalogSizerBox, -1, _("New"));
 	CatalogDelete = new wxButton(CatalogSizerBox, -1, _("Delete"));
+	TogglePreview = new wxButton(CatalogSizerBox, -1, to_wx("效果预览"));
+	TogglePreview->SetToolTip(to_wx("切换样式列表显示模式：在纯文本列表与实际字幕效果预览之间切换"));
+
 	CatalogSizer->Add(CatalogList,1,wxEXPAND | wxRIGHT,5);
 	CatalogSizer->Add(CatalogNew,0,wxRIGHT,5);
-	CatalogSizer->Add(CatalogDelete,0,0,0);
+	CatalogSizer->Add(CatalogDelete,0,wxRIGHT,15);
+	CatalogSizer->Add(TogglePreview,0,wxALIGN_CENTER_VERTICAL,0);
 
 	// Storage styles list
 	wxSizer *StorageButtons = make_edit_buttons(StorageSizerBox, _("Copy to &current script ->"), &MoveToLocal, &StorageNew, &StorageEdit, &StorageCopy, &StorageDelete);
 
 	wxSizer *StorageListSizer = new wxBoxSizer(wxHORIZONTAL);
-	StorageList = new wxListBox(StorageSizerBox, -1, wxDefaultPosition, wxSize(240,250), 0, nullptr, wxLB_EXTENDED);
+	StorageList = new StyleListBox(StorageSizerBox, -1, wxDefaultPosition, FromDIP(wxSize(280,260)), wxLB_EXTENDED,
+		[this](std::string const& name) -> const AssStyle* { return Store.GetStyle(name); });
 	StorageListSizer->Add(StorageList,1,wxEXPAND,0);
 	StorageListSizer->Add(make_move_buttons(StorageSizerBox, &StorageMoveUp, &StorageMoveDown, &StorageMoveTop, &StorageMoveBottom, &StorageSort), wxSizerFlags().Expand());
 
@@ -312,7 +577,8 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 	MoveImportSizer->Add(CurrentImport,1,wxEXPAND,0);
 
 	wxSizer *CurrentListSizer = new wxBoxSizer(wxHORIZONTAL);
-	CurrentList = new wxListBox(CurrentSizerBox, -1, wxDefaultPosition, wxSize(240,250), 0, nullptr, wxLB_EXTENDED);
+	CurrentList = new StyleListBox(CurrentSizerBox, -1, wxDefaultPosition, FromDIP(wxSize(280,260)), wxLB_EXTENDED,
+		[this](std::string const& name) -> const AssStyle* { return c->ass->GetStyle(name); });
 	CurrentListSizer->Add(CurrentList,1,wxEXPAND,0);
 	CurrentListSizer->Add(make_move_buttons(CurrentSizerBox, &CurrentMoveUp, &CurrentMoveDown, &CurrentMoveTop, &CurrentMoveBottom, &CurrentSort), wxSizerFlags().Expand());
 
@@ -328,8 +594,8 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 
 	// General layout
 	wxSizer *StylesSizer = new wxBoxSizer(wxHORIZONTAL);
-	StylesSizer->Add(StorageSizer,0,wxRIGHT | wxEXPAND,5);
-	StylesSizer->Add(CurrentSizer,0,wxEXPAND,0);
+	StylesSizer->Add(StorageSizer,1,wxRIGHT | wxEXPAND,5);
+	StylesSizer->Add(CurrentSizer,1,wxEXPAND,0);
 	wxSizer *MainSizer = new wxBoxSizer(wxVERTICAL);
 	MainSizer->Add(CatalogSizer,0,wxEXPAND | wxLEFT | wxRIGHT | wxTOP,5);
 	MainSizer->Add(StylesSizer,1,wxEXPAND | wxALL,5);
@@ -387,6 +653,31 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 
 	CurrentList->Bind(wxEVT_LISTBOX, [this](wxCommandEvent&) { UpdateButtons(); });
 	CurrentList->Bind(wxEVT_LISTBOX_DCLICK, [this](wxCommandEvent&) { OnCurrentEdit(); });
+
+	auto update_preview_label = [this]() {
+		bool p = StorageList->GetPreviewMode();
+		TogglePreview->SetLabel(p ? to_wx("纯文本列表") : to_wx("效果预览"));
+	};
+
+	TogglePreview->Bind(wxEVT_BUTTON, [this, update_preview_label](wxCommandEvent&) {
+		bool next = !StorageList->GetPreviewMode();
+		StorageList->SetPreviewMode(next);
+		CurrentList->SetPreviewMode(next);
+		update_preview_label();
+		try {
+			OPT_SET("Tool/Style Manager/Preview")->SetBool(next);
+		} catch (...) {}
+	});
+
+	bool init_prev = false;
+	try {
+		init_prev = OPT_GET("Tool/Style Manager/Preview")->GetBool();
+	} catch (...) {}
+	if (init_prev) {
+		StorageList->SetPreviewMode(true);
+		CurrentList->SetPreviewMode(true);
+		update_preview_label();
+	}
 }
 
 void DialogStyleManager::LoadCurrentStyles(int commit_type) {

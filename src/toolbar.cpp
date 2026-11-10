@@ -44,7 +44,38 @@ namespace {
 	json::Object const& get_root() {
 		static json::Object root;
 		if (root.empty()) {
-			boost::interprocess::ibufferstream stream((const char *)default_toolbar, sizeof(default_toolbar));
+			size_t len = sizeof(default_toolbar);
+			if (default_toolbar[0] == '{') {
+				int depth = 0;
+				bool in_string = false;
+				bool escape = false;
+				for (size_t i = 0; i < 65536; ++i) {
+					char c = static_cast<char>(default_toolbar[i]);
+					if (escape) {
+						escape = false;
+						continue;
+					}
+					if (c == '\\' && in_string) {
+						escape = true;
+						continue;
+					}
+					if (c == '"') {
+						in_string = !in_string;
+						continue;
+					}
+					if (!in_string) {
+						if (c == '{') depth++;
+						else if (c == '}') {
+							depth--;
+							if (depth == 0) {
+								len = i + 1;
+								break;
+							}
+						}
+					}
+				}
+			}
+			boost::interprocess::ibufferstream stream((const char *)default_toolbar, len);
 			root = std::move(static_cast<json::Object&>(agi::json_util::parse(stream)));
 		}
 		return root;

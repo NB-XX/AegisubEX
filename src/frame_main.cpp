@@ -44,6 +44,8 @@
 #include "audio_box.h"
 #include "base_grid.h"
 #include "ai_assistant.h"
+#include "selection_controller.h"
+#include <wx/stc/stc.h>
 #include "compat.h"
 #include "command/command.h"
 #include "dialog_detached_video.h"
@@ -161,9 +163,11 @@ FrameMain::FrameMain()
 	SetDisplayMode(1, 1);
 
 	StartupLog("Leaving FrameMain constructor");
+	wxEvtHandler::AddFilter(this);
 }
 
 FrameMain::~FrameMain () {
+	wxEvtHandler::RemoveFilter(this);
 	context->aiPanel = nullptr;
 	// Restore the provider's normal subtitle source before either it or the
 	// controls which observe playback are torn down.
@@ -218,7 +222,7 @@ void FrameMain::InitContents() {
 	TopSizer->Add(ToolsSizer, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 5);
 	BottomSizer = new wxBoxSizer(wxHORIZONTAL);
 	BottomSizer->Add(context->subsGrid, 1, wxEXPAND, 0);
-	BottomSizer->Add(aiPanel, 0, wxEXPAND | wxLEFT, 4);
+	BottomSizer->Add(aiPanel, 1, wxEXPAND | wxLEFT, 4);
 	MainSizer = new wxBoxSizer(wxVERTICAL);
 	MainSizer->Add(new wxStaticLine(Panel),0,wxEXPAND,0);
 	MainSizer->Add(TopSizer,0,wxEXPAND,0);
@@ -356,6 +360,67 @@ void FrameMain::OnAudioOpen(agi::AudioProvider *provider) {
 void FrameMain::OnSubtitlesOpen() {
 	UpdateTitle();
 	SetDisplayMode(1, 1);
+}
+
+int FrameMain::FilterEvent(wxEvent& event) {
+	wxEventType type = event.GetEventType();
+	if (type == wxEVT_KEY_DOWN || type == wxEVT_CHAR) {
+		wxKeyEvent &ke = static_cast<wxKeyEvent&>(event);
+
+		// Fast-path 1: 带有功能修饰键直接跳过
+		if (ke.CmdDown() || ke.AltDown() || ke.ShiftDown())
+			return Event_Skip;
+
+		// Fast-path 2: 仅拦截数字键 0-9 与上下方向键，其它普通输入 1ns 极速放行
+		int key = ke.GetKeyCode();
+		bool is_digit = (key >= '0' && key <= '9') || (key >= WXK_NUMPAD0 && key <= WXK_NUMPAD9);
+		bool is_arrow = (key == WXK_UP || key == WXK_DOWN);
+		if (!is_digit && !is_arrow)
+			return Event_Skip;
+
+		if (context && context->aiPanel && OPT_GET("Tool/Playback/Review Quick Style")->GetBool()) {
+			wxWindow *focused = wxWindow::FindFocus();
+			if (!focused) return Event_Skip;
+
+			// 焦点不在主窗口内（如独立弹窗、设置窗口）时不拦截
+			if (wxGetTopLevelParent(focused) != this)
+				return Event_Skip;
+
+			bool is_text_entry = false;
+			for (wxWindow *w = focused; w; w = w->GetParent()) {
+				if (dynamic_cast<wxTextCtrl*>(w) || dynamic_cast<wxStyledTextCtrl*>(w) || dynamic_cast<wxComboBox*>(w)) {
+					is_text_entry = true;
+					break;
+				}
+			}
+
+			if (!is_text_entry) {
+				int num_index = -1;
+				if (key >= '1' && key <= '9') num_index = key - '1';
+				else if (key == '0') num_index = 9;
+				else if (key >= WXK_NUMPAD1 && key <= WXK_NUMPAD9) num_index = key - WXK_NUMPAD1;
+				else if (key == WXK_NUMPAD0) num_index = 9;
+
+				if (num_index >= 0) {
+					if (type == wxEVT_KEY_DOWN) {
+						context->aiPanel->ApplyStyle(num_index);
+					}
+					return Event_Processed;
+				}
+
+				if (is_arrow && context->selectionController && focused != context->subsGrid) {
+					if (type == wxEVT_KEY_DOWN) {
+						if (key == WXK_UP)
+							context->selectionController->PrevLine();
+						else
+							context->selectionController->NextLine();
+					}
+					return Event_Processed;
+				}
+			}
+		}
+	}
+	return Event_Skip;
 }
 
 void FrameMain::OnKeyDown(wxKeyEvent &event) {

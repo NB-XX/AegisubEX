@@ -184,6 +184,8 @@ class TimeStretchEngine {
 
 	/// Content frame where the next segment starts
 	double cursor = 0;
+	int64_t start_pos = 0;
+	int64_t hop_count = 0;
 	/// Content frame to stop fetching audio at (silence beyond)
 	int64_t limit = 0;
 
@@ -257,7 +259,8 @@ class TimeStretchEngine {
 	void RunHop(double volume)
 	{
 		int64_t const e = static_cast<int64_t>(std::floor(cursor + 0.5));
-		int64_t const nominal = static_cast<int64_t>(std::floor(cursor + step + 0.5));
+		++hop_count;
+		int64_t const nominal = static_cast<int64_t>(std::floor(start_pos + hop_count * step + 0.5));
 
 		// Need this segment plus the candidate heads for the next start search
 		int64_t const reach = std::max<int64_t>(frame_len, (nominal + search + hop) - e) + 2;
@@ -310,7 +313,7 @@ public:
 		float_samples = p->AreSamplesFloat();
 		hop = std::max(32, p->GetSampleRate() / 50);
 		frame_len = 2 * hop;
-		search = std::max(4, hop / 2);
+		search = std::clamp(p->GetSampleRate() / 140, 4, hop / 4);
 
 		double const pi = std::acos(-1.0);
 		hann.resize(frame_len);
@@ -327,9 +330,11 @@ public:
 	/// @param speed Content frames consumed per output frame multiplier
 	void Reset(int64_t start, int64_t end, double speed)
 	{
+		start_pos = start;
 		cursor = static_cast<double>(start);
 		limit = end;
 		step = hop * speed;
+		hop_count = 0;
 		std::fill(tail.begin(), tail.end(), 0.0);
 		emit_pos = emit.size(); // force a fresh hop on first Generate
 	}
@@ -627,6 +632,7 @@ restart_playback:
 			{
 				// Start or restart playback
 				bfr->Stop();
+				speed = pending_speed;
 
 				next_input_frame = start_frame;
 				if (stretch_mode)

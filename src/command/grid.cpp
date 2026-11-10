@@ -445,6 +445,60 @@ struct grid_swap final : public Command {
 	}
 };
 
+struct grid_align_forward final : public Command {
+	CMD_NAME("grid/align/forward")
+	STR_MENU("Auto Align &Forward")
+	STR_DISP("Auto Align Forward")
+	STR_HELP("Set the start time of the second line to the end time of the first line")
+	CMD_TYPE(COMMAND_VALIDATE)
+
+	bool Validate(const agi::Context *c) override {
+		return c->selectionController->GetSelectedSet().size() == 2;
+	}
+
+	void operator()(agi::Context *c) override {
+		auto sel = c->selectionController->GetSortedSelection();
+		if (sel.size() != 2) return;
+		AssDialogue *first = sel[0];
+		AssDialogue *second = sel[1];
+		if (first->Start > second->Start)
+			std::swap(first, second);
+
+		second->Start = first->End;
+		if (second->End < second->Start)
+			second->End = second->Start;
+
+		c->ass->Commit(_("auto align forward"), AssFile::COMMIT_DIAG_TIME);
+	}
+};
+
+struct grid_align_backward final : public Command {
+	CMD_NAME("grid/align/backward")
+	STR_MENU("Auto Align &Backward")
+	STR_DISP("Auto Align Backward")
+	STR_HELP("Set the end time of the first line to the start time of the second line")
+	CMD_TYPE(COMMAND_VALIDATE)
+
+	bool Validate(const agi::Context *c) override {
+		return c->selectionController->GetSelectedSet().size() == 2;
+	}
+
+	void operator()(agi::Context *c) override {
+		auto sel = c->selectionController->GetSortedSelection();
+		if (sel.size() != 2) return;
+		AssDialogue *first = sel[0];
+		AssDialogue *second = sel[1];
+		if (first->Start > second->Start)
+			std::swap(first, second);
+
+		first->End = second->Start;
+		if (first->Start > first->End)
+			first->Start = first->End;
+
+		c->ass->Commit(_("auto align backward"), AssFile::COMMIT_DIAG_TIME);
+	}
+};
+
 }
 
 namespace cmd {
@@ -471,6 +525,8 @@ namespace cmd {
 		reg(std::make_unique<grid_move_down>());
 		reg(std::make_unique<grid_move_up>());
 		reg(std::make_unique<grid_swap>());
+		reg(std::make_unique<grid_align_forward>());
+		reg(std::make_unique<grid_align_backward>());
 		reg(std::make_unique<grid_tag_cycle_hiding>());
 		reg(std::make_unique<grid_tags_hide>());
 		reg(std::make_unique<grid_tags_show>());

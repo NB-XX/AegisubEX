@@ -29,6 +29,8 @@
 
 #include "video_box.h"
 
+#include "ai_assistant.h"
+
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "base_grid.h"
@@ -37,6 +39,7 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/toolbar.h"
 #include "options.h"
+#include "frame_main.h"
 #include "project.h"
 #include "selection_controller.h"
 #include "video_controller.h"
@@ -66,28 +69,7 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 	VideoSubsPos = new wxTextCtrl(this, -1, "", wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
 	VideoSubsPos->SetToolTip(_("Time of this frame relative to start and end of current subs"));
 
-	reviewPreviewButton = new wxButton(this, wxID_ANY, to_wx("预览±1秒"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
-	reviewOverlapButton = new wxButton(this, wxID_ANY, to_wx("重叠高亮：关"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
-	reviewReplayButton = new wxButton(this, wxID_ANY, to_wx("改后重播：关"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
-	reviewPreviewButton->Hide();
-	reviewOverlapButton->Hide();
-	reviewReplayButton->Hide();
-	reviewPreviewButton->SetToolTip(to_wx("播放当前选中字幕及其前后各1秒"));
-	reviewPreviewButton->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-		if (!this->context->project->VideoProvider()) return;
-		if (auto line = this->context->selectionController->GetActiveLine())
-			this->context->videoController->PlayReviewPreview(line->Start, line->End, this->context->ass.get());
-	});
-	reviewOverlapButton->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-		if (this->context->subsGrid)
-			this->context->subsGrid->SetOverlapHighlight(!this->context->subsGrid->IsOverlapHighlightEnabled());
-		UpdateReviewControls();
-	});
-	reviewReplayButton->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-		bool current = OPT_GET("Tool/Playback/Review Replay After Edit")->GetBool();
-		OPT_SET("Tool/Playback/Review Replay After Edit")->SetBool(!current);
-		UpdateReviewControls();
-	});
+
 
 	wxArrayString choices;
 	for (int i = 1; i <= 24; ++i)
@@ -110,9 +92,6 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 
 	auto videoBottomSizer = new wxBoxSizer(wxHORIZONTAL);
 	videoBottomSizer->Add(videoToolbar, wxSizerFlags(0).Center());
-	videoBottomSizer->Add(reviewPreviewButton, wxSizerFlags(0).Center().Border(wxLEFT));
-	videoBottomSizer->Add(reviewOverlapButton, wxSizerFlags(0).Center().Border(wxLEFT));
-	videoBottomSizer->Add(reviewReplayButton, wxSizerFlags(0).Center().Border(wxLEFT));
 	videoBottomSizer->Add(VideoPosition, wxSizerFlags(1).Center().Border(wxLEFT));
 	videoBottomSizer->Add(VideoSubsPos, wxSizerFlags(1).Center().Border(wxLEFT));
 	videoBottomSizer->Add(zoomBox, wxSizerFlags(0).Center().Border(wxLEFT | wxRIGHT));
@@ -141,16 +120,20 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 
 void VideoBox::UpdateReviewControls() {
 	bool review = context->videoController->IsReviewMode();
+	videoToolbar->Freeze();
 	toolbar::SetCommandVisible(videoToolbar, "video/opt/autoscroll", !review);
-	reviewPreviewButton->Show(review);
-	bool overlap_highlight = review && context->subsGrid && context->subsGrid->IsOverlapHighlightEnabled();
-	reviewOverlapButton->SetLabel(to_wx(overlap_highlight ? "重叠高亮：开" : "重叠高亮：关"));
-	reviewOverlapButton->SetToolTip(to_wx(overlap_highlight ? "关闭字幕时间重叠高亮" : "高亮所有时间重叠的字幕行"));
-	reviewOverlapButton->Show(review);
-	bool replay_after_edit = OPT_GET("Tool/Playback/Review Replay After Edit")->GetBool();
-	reviewReplayButton->SetLabel(to_wx(replay_after_edit ? "改后重播：开" : "改后重播：关"));
-	reviewReplayButton->SetToolTip(to_wx(replay_after_edit ? "已开启：修改过本行后离开编辑区，从该行开头重新播放" : "当前从暂停处继续播放；打开后：修改过本行则从该行开头重新播放"));
-	reviewReplayButton->Show(review);
+	toolbar::SetCommandVisible(videoToolbar, "review/preview", review);
+	toolbar::SetCommandVisible(videoToolbar, "review/overlap", review);
+	toolbar::SetCommandVisible(videoToolbar, "review/replay_after_edit", review);
+	toolbar::SetCommandVisible(videoToolbar, "review/smooth_preview", review);
+	toolbar::SetCommandVisible(videoToolbar, "ai/style_quick", review);
+	videoToolbar->Thaw();
+	if (review && OPT_GET("Tool/Playback/Review Quick Style")->GetBool() && context->aiPanel) {
+		context->aiPanel->Show(true);
+		context->aiPanel->SelectTab(2);
+		if (context->frame)
+			context->frame->Layout();
+	}
 	Layout();
 }
 

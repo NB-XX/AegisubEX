@@ -448,7 +448,10 @@
 	"Tool" : {
 		"Playback" : {
 			"Play Speed" : 100,
-			"Review Replay After Edit" : false
+			"Review Replay After Edit" : false,
+			"Review Quick Style" : false,
+			"Review Quick Style Order" : "",
+			"Review Smooth Preview" : true
 		},
 		"Frame Match" : {
 			"Minimum Similarity" : 70,
@@ -459,10 +462,21 @@
 			"Region Y1" : -1.0
 		},
 		"AI" : {
+			"Active Profile" : "默认配置",
+			"Profiles" : "",
+			"Endpoint" : "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
 			"API Key" : "",
 			"Vision Model" : "qwen3.8-flash",
 			"Audio Model" : "qwen3.8-omni-flash",
+			"Source Lang" : "自动检测",
 			"Target Lang" : "简体中文",
+			"Proxy Type" : "None",
+			"Proxy Host" : "",
+			"Proxy Port" : 0,
+			"Proxy User" : "",
+			"Proxy Password" : "",
+			"Timeout" : 60,
+			"Max Retries" : 2,
 			"Region X0" : 0.0,
 			"Region Y0" : 70.0,
 			"Region X1" : 100.0,
@@ -567,7 +581,8 @@
 				"X" : -1,
 				"Y" : -1
 			},
-			"Maximized" : false
+			"Maximized" : false,
+			"Preview" : false
 		},
 		"Styling Assistant" : {
 			"Last" : {

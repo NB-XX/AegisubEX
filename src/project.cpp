@@ -191,13 +191,112 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 	auto load_linked = OPT_GET("App/Auto/Load Linked Files")->GetInt();
 	if (!load_linked) return;
 
+	auto subs_path = context->subsController->Filename();
+	auto script_dir = subs_path.parent_path();
+	auto stem = subs_path.stem().string();
+
 	auto audio     = context->path->MakeAbsolute(properties.audio_file, "?script");
 	auto video     = context->path->MakeAbsolute(properties.video_file, "?script");
 	auto timecodes = context->path->MakeAbsolute(properties.timecodes_file, "?script");
 	auto keyframes = context->path->MakeAbsolute(properties.keyframes_file, "?script");
 
-	if (video == video_file && audio == audio_file && keyframes == keyframes_file && timecodes == timecodes_file)
+	// 1. Resolve video path:
+	bool video_is_dummy = context->path->IsDummyPath(video);
+	if (!video.empty() && !video_is_dummy && !agi::fs::FileExists(video) && !script_dir.empty()) {
+		auto fn = agi::fs::path(properties.video_file).filename();
+		if (!fn.empty()) {
+			auto cand = script_dir / fn;
+			if (agi::fs::FileExists(cand))
+				video = cand;
+		}
+	}
+	if ((video.empty() || (!video_is_dummy && !agi::fs::FileExists(video))) && !script_dir.empty() && !stem.empty()) {
+		static const char *common_video_exts[] = {
+			".mp4", ".mkv", ".webm", ".avi", ".mov", ".flv", ".ts", ".m2ts", ".wmv"
+		};
+		bool found = false;
+		for (auto const* ext : common_video_exts) {
+			auto cand = script_dir / (stem + ext);
+			if (agi::fs::FileExists(cand)) {
+				video = cand;
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			auto all_exts = VideoProviderFactory::GetFileExtensions();
+			for (auto const& ext : all_exts) {
+				auto cand = script_dir / (stem + ext);
+				if (agi::fs::FileExists(cand)) {
+					video = cand;
+					break;
+				}
+			}
+		}
+	}
+	// If the subtitle file didn't specify a video (and none was found next to it),
+	// but a video was already opened by the user, keep the currently opened video!
+	if (video.empty() && properties.video_file.empty() && !video_file.empty()) {
+		video = video_file;
+	}
+
+	// 2. Resolve audio path:
+	bool audio_is_dummy = context->path->IsDummyPath(audio);
+	if (!audio.empty() && !audio_is_dummy && !agi::fs::FileExists(audio) && !script_dir.empty()) {
+		auto fn = agi::fs::path(properties.audio_file).filename();
+		if (!fn.empty()) {
+			auto cand = script_dir / fn;
+			if (agi::fs::FileExists(cand))
+				audio = cand;
+		}
+	}
+	if ((audio.empty() || (!audio_is_dummy && !agi::fs::FileExists(audio))) && !script_dir.empty() && !stem.empty()) {
+		if (video.empty() || !OPT_GET("Video/Open Audio")->GetBool()) {
+			static const char *common_audio_exts[] = {
+				".wav", ".mp3", ".m4a", ".flac", ".aac", ".ogg", ".opus", ".w64"
+			};
+			bool found = false;
+			for (auto const* ext : common_audio_exts) {
+				auto cand = script_dir / (stem + ext);
+				if (agi::fs::FileExists(cand)) {
+					audio = cand;
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				auto all_exts = GetAudioProviderFileExtensions();
+				for (auto const& ext : all_exts) {
+					auto cand = script_dir / (stem + ext);
+					if (agi::fs::FileExists(cand)) {
+						audio = cand;
+						break;
+					}
+				}
+			}
+		}
+	}
+	// If the subtitle file didn't specify audio (and none found), but audio was already opened, keep it!
+	if (audio.empty() && properties.audio_file.empty() && !audio_file.empty()) {
+		audio = audio_file;
+	}
+
+	// 3. Resolve timecodes & keyframes if path broken
+	if (!timecodes.empty() && !agi::fs::FileExists(timecodes) && !script_dir.empty()) {
+		auto cand = script_dir / agi::fs::path(properties.timecodes_file).filename();
+		if (agi::fs::FileExists(cand))
+			timecodes = cand;
+	}
+	if (!keyframes.empty() && !agi::fs::FileExists(keyframes) && !script_dir.empty()) {
+		auto cand = script_dir / agi::fs::path(properties.keyframes_file).filename();
+		if (agi::fs::FileExists(cand))
+			keyframes = cand;
+	}
+
+	if (video == video_file && audio == audio_file && keyframes == keyframes_file && timecodes == timecodes_file) {
+		UpdateRelativePaths();
 		return;
+	}
 
 	if (load_linked == 2) {
 		// There are TOCTOU races here but they should not cause any actual harm.
@@ -317,6 +416,8 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 	}
 	else if (loaded_video && OPT_GET("Video/Open Audio")->GetBool() && audio_file != video_file && video_provider->HasAudio())
 		DoLoadAudio(video, true);
+
+	UpdateRelativePaths();
 }
 
 void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
@@ -570,10 +671,13 @@ void Project::LoadList(std::vector<agi::fs::path> const& files) {
 			LoadTimecodes(timecodes);
 		if (!keyframes.empty())
 			LoadKeyframes(keyframes);
+		context->ass->Commit(_("load video"), AssFile::COMMIT_SCRIPTINFO);
 	}
 
-	if (!audio.empty())
+	if (!audio.empty()) {
 		DoLoadAudio(audio, false);
+		context->ass->Commit(_("load audio"), AssFile::COMMIT_SCRIPTINFO);
+	}
 	else if (OPT_GET("Video/Open Audio")->GetBool() && audio_file != video_file)
 		DoLoadAudio(video_file, true);
 

@@ -124,6 +124,8 @@ public:
 
 	/// Ask the video provider to change YCbCr matrices
 	void SetColorSpace(agi::ycbcr::Header matrix);
+	void SetSmoothPreview(bool enabled);
+	bool IsSmoothPreview() const;
 	void SetShowSubtitles(bool val) { show_subtitles = val; }
 	bool GetShowSubtitles() const { return show_subtitles.load(); }
 

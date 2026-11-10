@@ -34,6 +34,7 @@
 #include <memory>
 #include <wx/frame.h>
 #include <wx/timer.h>
+#include <wx/eventfilter.h>
 
 class AegisubApp;
 class AsyncVideoProvider;
@@ -43,7 +44,7 @@ class AIResultPanel;
 namespace agi { class AudioProvider; }
 namespace agi { struct Context; class OptionValue; }
 
-class FrameMain : public wxFrame, private agi::signal::ConnectionScope {
+class FrameMain : public wxFrame, private agi::signal::ConnectionScope, public wxEventFilter {
 	friend class AegisubApp;
 
 	std::unique_ptr<agi::Context> context;
@@ -62,6 +63,7 @@ class FrameMain : public wxFrame, private agi::signal::ConnectionScope {
 
 	void UpdateTitle();
 
+	int FilterEvent(wxEvent& event) override;
 	void OnKeyDown(wxKeyEvent &event);
 	void OnMouseWheel(wxMouseEvent &evt);
 

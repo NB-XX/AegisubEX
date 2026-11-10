@@ -44,16 +44,33 @@
 #include "selection_controller.h"
 #include "subs_controller.h"
 #include "video_controller.h"
+#include "ai_assistant.h"
 
 #include <libaegisub/util.h>
 
 #include <algorithm>
 #include <limits>
+#include <map>
+#include <set>
 
 #include <wx/dcbuffer.h>
 #include <wx/menu.h>
 #include <wx/scrolbar.h>
 #include <wx/sizer.h>
+
+namespace {
+	std::set<std::string> s_expanded_groups;
+	std::map<const AssDialogue*, int> s_line_to_grid_row;
+	wxBrush s_brush_motion_group(wxColour(235, 245, 255));
+	wxBrush s_brush_motion_group_selected(wxColour(200, 225, 255));
+
+	int GetRowFromDialogue(const AssDialogue *d) {
+		if (!d) return -1;
+		auto it = s_line_to_grid_row.find(d);
+		if (it != s_line_to_grid_row.end()) return it->second;
+		return -1;
+	}
+}
 
 // Check menu.h for id range allocation before editing this enum
 enum {
@@ -135,6 +152,9 @@ void BaseGrid::OnDPIChanged(wxDPIChangedEvent &e) {
 }
 
 void BaseGrid::OnSubtitlesCommit(int type) {
+	if (type == AssFile::COMMIT_NEW) {
+		s_expanded_groups.clear();
+	}
 	if (type == AssFile::COMMIT_NEW || type & AssFile::COMMIT_ORDER || type & AssFile::COMMIT_DIAG_ADDREM)
 		UpdateMaps();
 	else if (type & AssFile::COMMIT_DIAG_TIME)
@@ -198,6 +218,8 @@ void BaseGrid::UpdateStyle() {
 	row_colors.Playback.SetColour(wxColour(255, 222, 150));
 	row_colors.Overlap.SetColour(wxColour(255, 218, 222));
 	row_colors.OverlapSelected.SetColour(wxColour(232, 133, 140));
+	s_brush_motion_group.SetColour(wxColour(235, 245, 255));
+	s_brush_motion_group_selected.SetColour(wxColour(200, 225, 255));
 
 	if (width_helper)
 		width_helper->ClearCache();
@@ -210,11 +232,55 @@ void BaseGrid::UpdateStyle() {
 
 void BaseGrid::UpdateMaps() {
 	index_line_map.clear();
+	s_line_to_grid_row.clear();
 
-	for (auto& curdiag : context->ass->Events)
+	int current_group_row = -1;
+	std::string current_folded_gid;
+
+	for (auto& curdiag : context->ass->Events) {
+		std::string const& eff = curdiag.Effect.get();
+		if (eff.rfind("motion-group:", 0) == 0) {
+			std::string gid = eff.substr(13);
+			int row_idx = static_cast<int>(index_line_map.size());
+			index_line_map.push_back(&curdiag);
+			s_line_to_grid_row[&curdiag] = row_idx;
+
+			bool is_expanded = (s_expanded_groups.find(gid) != s_expanded_groups.end());
+			std::string text = curdiag.Text.get();
+			if (!is_expanded && text.rfind("▼", 0) == 0) {
+				curdiag.Text = "▶" + text.substr(3);
+			} else if (is_expanded && text.rfind("▶", 0) == 0) {
+				curdiag.Text = "▼" + text.substr(3);
+			}
+
+			if (is_expanded) {
+				current_folded_gid.clear();
+				current_group_row = -1;
+			} else {
+				current_folded_gid = gid;
+				current_group_row = row_idx;
+			}
+			continue;
+		}
+
+		if (eff.rfind("motion-frame:", 0) == 0) {
+			std::string gid = eff.substr(13);
+			bool is_expanded = (s_expanded_groups.find(gid) != s_expanded_groups.end());
+			if (!is_expanded) {
+				int group_row = (gid == current_folded_gid && current_group_row >= 0) ? current_group_row : -1;
+				s_line_to_grid_row[&curdiag] = group_row;
+				continue;
+			}
+		}
+
+		int row_idx = static_cast<int>(index_line_map.size());
 		index_line_map.push_back(&curdiag);
-	UpdateOverlapRows();
+		s_line_to_grid_row[&curdiag] = row_idx;
+		current_folded_gid.clear();
+		current_group_row = -1;
+	}
 
+	UpdateOverlapRows();
 	SetColumnWidths();
 	AdjustScrollbar();
 	Refresh(false);
@@ -250,9 +316,12 @@ void BaseGrid::UpdateOverlapRows() {
 
 void BaseGrid::OnActiveLineChanged(AssDialogue *new_active) {
 	if (new_active) {
-		if (new_active->Row != active_row)
-			MakeRowVisible(new_active->Row);
-		extendRow = active_row = new_active->Row;
+		int grid_row = GetRowFromDialogue(new_active);
+		if (grid_row >= 0) {
+			if (grid_row != active_row)
+				MakeRowVisible(grid_row);
+			extendRow = active_row = grid_row;
+		}
 		Refresh(false);
 	}
 	else
@@ -295,7 +364,8 @@ void BaseGrid::OnSeek() {
 		int time = context->videoController->TimeAtFrame(context->videoController->GetFrameN(), agi::vfr::EXACT);
 		for (size_t i = 0; i < index_line_map.size(); ++i) {
 			auto line = index_line_map[i];
-			if (!line->Comment && line->Start <= time && time < line->End) {
+			bool is_motion_group = (line->Effect.get().rfind("motion-group:", 0) == 0);
+			if ((!line->Comment || is_motion_group) && line->Start <= time && time < line->End) {
 				new_playback_row = static_cast<int>(i);
 				break;
 			}
@@ -415,14 +485,11 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 
 	const auto active_line = context->selectionController->GetActiveLine();
 	auto const& selection = context->selectionController->GetSelectedSet();
+	int active_grid_row = GetRowFromDialogue(active_line);
 	bool active_line_overlaps = false;
 	if (overlap_highlight && active_line && !active_line->Comment && active_line->End > active_line->Start) {
-		for (auto line : index_line_map) {
-			if (line != active_line && !line->Comment && line->End > line->Start && active_line->CollidesWith(line)) {
-				active_line_overlaps = true;
-				break;
-			}
-		}
+		if (active_grid_row >= 0 && static_cast<size_t>(active_grid_row) < overlap_rows.size())
+			active_line_overlaps = overlap_rows[active_grid_row];
 	}
 	visible_rows.clear();
 
@@ -430,8 +497,13 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 		wxBrush color = row_colors.Default;
 		AssDialogue *curDiag = index_line_map[i + yPos];
 
+		bool is_motion_group = (curDiag->Effect.get().rfind("motion-group:", 0) == 0);
 		bool inSel = !!selection.count(curDiag);
-		if (inSel && curDiag->Comment)
+		if (inSel && is_motion_group)
+			color = s_brush_motion_group_selected;
+		else if (is_motion_group)
+			color = s_brush_motion_group;
+		else if (inSel && curDiag->Comment)
 			color = row_colors.SelectedComment;
 		else if (inSel)
 			color = row_colors.Selection;
@@ -463,6 +535,8 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 			dc.SetTextForeground(text_collision);
 		else if (inSel)
 			dc.SetTextForeground(text_selection);
+		else if (is_motion_group)
+			dc.SetTextForeground(wxColour(0, 95, 185));
 		else
 			dc.SetTextForeground(text_standard);
 
@@ -500,10 +574,10 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 		dc.DrawLine(w, 0, w, maxH);
 	}
 
-	if (active_line && active_line->Row >= yPos && active_line->Row < yPos + nDraw) {
+	if (active_grid_row >= yPos && active_grid_row < yPos + nDraw) {
 		dc.SetPen(wxPen(to_wx(OPT_GET("Colour/Subtitle Grid/Active Border")->GetColor())));
 		dc.SetBrush(*wxTRANSPARENT_BRUSH);
-		dc.DrawRectangle(0, (active_line->Row - yPos + 1) * lineHeight, w, lineHeight + 1);
+		dc.DrawRectangle(0, (active_grid_row - yPos + 1) * lineHeight, w, lineHeight + 1);
 	}
 }
 
@@ -534,6 +608,61 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 		row = mid(0, row, GetRows()-1);
 	AssDialogue *dlg = GetDialogue(row);
 	if (!dlg) row = 0;
+
+	bool is_motion_group = (dlg && dlg->Effect.get().rfind("motion-group:", 0) == 0);
+
+	auto toggle_group_fold = [this](AssDialogue *d) {
+		if (!d) return;
+		std::string const& eff = d->Effect.get();
+		if (eff.rfind("motion-group:", 0) != 0) return;
+		std::string gid = eff.substr(13);
+
+		bool was_expanded = (s_expanded_groups.find(gid) != s_expanded_groups.end());
+		if (was_expanded) {
+			s_expanded_groups.erase(gid);
+		} else {
+			s_expanded_groups.insert(gid);
+		}
+
+		// 翻转开合箭头图标
+		std::string text = d->Text.get();
+		if (!was_expanded) { // 展开
+			if (text.rfind("▶", 0) == 0) {
+				text = "▼" + text.substr(3);
+			}
+		} else { // 折叠
+			if (text.rfind("▼", 0) == 0) {
+				text = "▶" + text.substr(3);
+			}
+		}
+		if (text != d->Text.get()) {
+			d->Text = text;
+		}
+
+		UpdateMaps();
+
+		int new_row = GetRowFromDialogue(d);
+		if (new_row >= 0) {
+			context->selectionController->SetActiveLine(d);
+			SelectRow(new_row, false);
+			MakeRowVisible(new_row);
+		}
+		if (context->videoController) {
+			context->videoController->JumpToTime(d->Start);
+		}
+	};
+
+	// Double-click on motion-group row toggles expand/collapse
+	if (dclick && is_motion_group && !shift && !ctrl && !alt) {
+		toggle_group_fold(dlg);
+		return;
+	}
+
+	// Single-click on line number '#' column of motion-group row toggles expand/collapse
+	if (click && is_motion_group && !shift && !ctrl && !alt && event.GetX() < columns[0]->Width()) {
+		toggle_group_fold(dlg);
+		return;
+	}
 
 	if (event.ButtonDown() && OPT_GET("Subtitle/Grid/Focus Allow")->GetBool())
 		SetFocus();
@@ -769,13 +898,28 @@ void BaseGrid::OnKeyDown(wxKeyEvent &event) {
 	}
 
 	if (!dir) {
+		bool quick_style = OPT_GET("Tool/Playback/Review Quick Style")->GetBool();
+		if (quick_style && !ctrl && !alt && context->aiPanel) {
+			int num_index = -1;
+			if (key >= '1' && key <= '9') num_index = key - '1';
+			else if (key == '0') num_index = 9;
+			else if (key >= WXK_NUMPAD1 && key <= WXK_NUMPAD9) num_index = key - WXK_NUMPAD1;
+			else if (key == WXK_NUMPAD0) num_index = 9;
+
+			if (num_index >= 0) {
+				context->aiPanel->ApplyStyle(num_index);
+				return;
+			}
+		}
 		event.Skip();
 		return;
 	}
 
 	auto active_line = context->selectionController->GetActiveLine();
 	int old_extend = extendRow;
-	int next = mid(0, (active_line ? active_line->Row : 0) + dir * step, GetRows() - 1);
+	int current_grid_row = active_line ? GetRowFromDialogue(active_line) : 0;
+	if (current_grid_row < 0) current_grid_row = 0;
+	int next = mid(0, current_grid_row + dir * step, GetRows() - 1);
 	context->selectionController->SetActiveLine(GetDialogue(next));
 
 	// Move selection

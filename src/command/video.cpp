@@ -34,10 +34,13 @@
 #include "../ass_dialogue.h"
 #include "../ass_file.h"
 #include "../async_video_provider.h"
+#include "../base_grid.h"
 #include "../compat.h"
 #include "../dialog_detached_video.h"
 #include "../dialog_manager.h"
 #include "../dialogs.h"
+#include "../dialog_motion_tracker.h"
+#include "../dialog_video_shuffler.h"
 #include "../format.h"
 #include "../frame_main.h"
 #include "../include/aegisub/context.h"
@@ -267,6 +270,65 @@ struct video_details final : public validator_video_loaded {
 	void operator()(agi::Context *c) override {
 		c->videoController->Stop();
 		ShowVideoDetailsDialog(c);
+	}
+};
+
+struct video_motion_track final : public validator_video_loaded {
+	CMD_NAME("video/motion_track")
+	wxString StrMenu(const agi::Context *) const override { return to_wx("运动追踪与相对位移 (Motion Tracking)..."); }
+	wxString StrDisplay(const agi::Context *) const override { return to_wx("运动追踪与相对位移"); }
+	wxString StrHelp() const override { return to_wx("在视频画面上拖拽框选花字目标并生成逐帧相对位移字幕"); }
+
+	wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
+		static const char svg[] =
+			"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">"
+			"<path d=\"M4 18 C8 18 8 8 16 8\" fill=\"none\" stroke=\"#E67E22\" stroke-width=\"2\" stroke-dasharray=\"2,2\"/>"
+			"<circle cx=\"4\" cy=\"18\" r=\"2\" fill=\"#E67E22\"/>"
+			"<circle cx=\"16\" cy=\"8\" r=\"5\" fill=\"none\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
+			"<line x1=\"16\" y1=\"1\" x2=\"16\" y2=\"5\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
+			"<line x1=\"16\" y1=\"11\" x2=\"16\" y2=\"15\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
+			"<line x1=\"9\" y1=\"8\" x2=\"13\" y2=\"8\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
+			"<line x1=\"19\" y1=\"8\" x2=\"23\" y2=\"8\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
+			"<circle cx=\"16\" cy=\"8\" r=\"1.5\" fill=\"#E74C3C\"/>"
+			"</svg>";
+		return wxBitmapBundle::FromSVG(svg, wxSize(height, height));
+	}
+
+	void operator()(agi::Context *c) override {
+		c->videoController->Stop();
+		c->videoDisplay->SetTool(std::make_unique<VisualToolMotionTrack>(c->videoDisplay, c));
+	}
+};
+
+struct video_shuffler final : public validator_video_loaded {
+	CMD_NAME("video/shuffler")
+	wxString StrMenu(const agi::Context *) const override { return to_wx("按字幕切分/合并视频 (Video Shuffler)..."); }
+	wxString StrDisplay(const agi::Context *) const override { return to_wx("按字幕切片/合并"); }
+	wxString StrHelp() const override { return to_wx("基于字幕时间轴、注释与章节标记，自动对视频进行精简切分、去除静音、打乱重组与批量分段"); }
+
+	wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
+		static const char svg[] =
+			"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">"
+			"<rect x=\"2\" y=\"4\" width=\"20\" height=\"16\" rx=\"2\" fill=\"none\" stroke=\"#2C3E50\" stroke-width=\"2\"/>"
+			"<line x1=\"2\" y1=\"8\" x2=\"22\" y2=\"8\" stroke=\"#2C3E50\" stroke-width=\"1.5\"/>"
+			"<line x1=\"2\" y1=\"16\" x2=\"22\" y2=\"16\" stroke=\"#2C3E50\" stroke-width=\"1.5\"/>"
+			"<line x1=\"6\" y1=\"4\" x2=\"6\" y2=\"8\" stroke=\"#2C3E50\" stroke-width=\"1.5\"/>"
+			"<line x1=\"12\" y1=\"4\" x2=\"12\" y2=\"8\" stroke=\"#2C3E50\" stroke-width=\"1.5\"/>"
+			"<line x1=\"18\" y1=\"4\" x2=\"18\" y2=\"8\" stroke=\"#2C3E50\" stroke-width=\"1.5\"/>"
+			"<line x1=\"6\" y1=\"16\" x2=\"6\" y2=\"20\" stroke=\"#2C3E50\" stroke-width=\"1.5\"/>"
+			"<line x1=\"12\" y1=\"16\" x2=\"12\" y2=\"20\" stroke=\"#2C3E50\" stroke-width=\"1.5\"/>"
+			"<line x1=\"18\" y1=\"16\" x2=\"18\" y2=\"20\" stroke=\"#2C3E50\" stroke-width=\"1.5\"/>"
+			"<line x1=\"11\" y1=\"8\" x2=\"11\" y2=\"16\" stroke=\"#E74C3C\" stroke-width=\"2\" stroke-dasharray=\"2,1\"/>"
+			"<circle cx=\"15\" cy=\"11\" r=\"1.5\" fill=\"#E67E22\"/>"
+			"<circle cx=\"15\" cy=\"14\" r=\"1.5\" fill=\"#E67E22\"/>"
+			"<path d=\"M14 11 L10 13 M14 14 L10 12\" stroke=\"#E67E22\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>"
+			"</svg>";
+		return wxBitmapBundle::FromSVG(svg, wxSize(height, height));
+	}
+
+	void operator()(agi::Context *c) override {
+		c->videoController->Stop();
+		ShowVideoShufflerDialog(c);
 	}
 };
 
@@ -645,11 +707,23 @@ struct video_play final : public validator_video_loaded {
 
 struct review_mode final : public validator_video_loaded {
 	CMD_NAME("review/mode")
-	CMD_ICON(spellcheck_toolbutton)
 	wxString StrMenu(const agi::Context *) const override { return to_wx("字幕审校模式"); }
-	wxString StrDisplay(const agi::Context *) const override { return ""; }
+	wxString StrDisplay(const agi::Context *) const override { return to_wx("审校模式"); }
 	wxString StrHelp() const override { return to_wx("字幕审校模式：进入或退出字幕审校模式"); }
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
+
+	wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
+		static const char svg[] =
+			"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">"
+			"<rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"3\" fill=\"none\" stroke=\"#2C3E50\" stroke-width=\"2\"/>"
+			"<line x1=\"6\" y1=\"7\" x2=\"14\" y2=\"7\" stroke=\"#2C3E50\" stroke-width=\"2\" stroke-linecap=\"round\"/>"
+			"<line x1=\"6\" y1=\"11\" x2=\"18\" y2=\"11\" stroke=\"#2C3E50\" stroke-width=\"2\" stroke-linecap=\"round\"/>"
+			"<line x1=\"6\" y1=\"15\" x2=\"12\" y2=\"15\" stroke=\"#2C3E50\" stroke-width=\"2\" stroke-linecap=\"round\"/>"
+			"<circle cx=\"17\" cy=\"17\" r=\"5\" fill=\"#E67E22\"/>"
+			"<path d=\"M15 17 L16.5 18.5 L19.5 15.5\" fill=\"none\" stroke=\"#FFFFFF\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>"
+			"</svg>";
+		return wxBitmapBundle::FromSVG(svg, wxSize(height, height));
+	}
 
 	bool IsActive(const agi::Context *c) override {
 		return c->videoController->IsReviewMode();
@@ -673,13 +747,110 @@ struct review_play_pause final : public validator_video_loaded {
 
 struct review_preview final : public validator_video_loaded {
 	CMD_NAME("review/preview")
-	wxString StrMenu(const agi::Context *) const override { return to_wx("预览当前字幕"); }
+	wxString StrMenu(const agi::Context *) const override { return to_wx("预览当前字幕 (±1秒)"); }
 	wxString StrDisplay(const agi::Context *) const override { return ""; }
-	wxString StrHelp() const override { return to_wx("预览当前字幕：播放当前选中字幕及其前后各1秒的画面"); }
+	wxString StrHelp() const override { return to_wx("单句预览 (±1秒)：播放当前选中字幕及其前后各1秒的画面"); }
+
+	wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
+		static const char svg[] =
+			"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">"
+			"<path d=\"M9 6 L18 12 L9 18 Z\" fill=\"#2B78E4\"/>"
+			"<path d=\"M3 5 L3 19\" stroke=\"#E67E22\" stroke-width=\"2.5\" stroke-linecap=\"round\"/>"
+			"<path d=\"M21 5 L21 19\" stroke=\"#E67E22\" stroke-width=\"2.5\" stroke-linecap=\"round\"/>"
+			"<path d=\"M3 12 L7 12\" stroke=\"#E67E22\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>"
+			"<path d=\"M17 12 L21 12\" stroke=\"#E67E22\" stroke-width=\"1.5\" stroke-linecap=\"round\"/>"
+			"</svg>";
+		return wxBitmapBundle::FromSVG(svg, wxSize(height, height));
+	}
 
 	void operator()(agi::Context *c) override {
 		if (auto line = c->selectionController->GetActiveLine())
 			c->videoController->PlayReviewPreview(line->Start, line->End, c->ass.get());
+	}
+};
+
+struct review_overlap final : public validator_video_loaded {
+	CMD_NAME("review/overlap")
+	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
+	wxString StrMenu(const agi::Context *) const override { return to_wx("重叠行高亮"); }
+	wxString StrDisplay(const agi::Context *) const override { return ""; }
+	wxString StrHelp() const override { return to_wx("重叠行高亮：高亮表格中所有时间互相重叠的字幕行"); }
+
+	wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
+		static const char svg[] =
+			"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">"
+			"<rect x=\"2\" y=\"5\" width=\"13\" height=\"5\" rx=\"1.5\" fill=\"#3498DB\"/>"
+			"<rect x=\"9\" y=\"14\" width=\"13\" height=\"5\" rx=\"1.5\" fill=\"#3498DB\"/>"
+			"<rect x=\"9\" y=\"5\" width=\"6\" height=\"5\" rx=\"1\" fill=\"#E74C3C\"/>"
+			"<rect x=\"9\" y=\"14\" width=\"6\" height=\"5\" rx=\"1\" fill=\"#E74C3C\"/>"
+			"<line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"22\" stroke=\"#E74C3C\" stroke-width=\"1.8\" stroke-dasharray=\"2,2\"/>"
+			"</svg>";
+		return wxBitmapBundle::FromSVG(svg, wxSize(height, height));
+	}
+
+	bool IsActive(const agi::Context *c) override {
+		return c->subsGrid && c->subsGrid->IsOverlapHighlightEnabled();
+	}
+
+	void operator()(agi::Context *c) override {
+		if (c->subsGrid)
+			c->subsGrid->SetOverlapHighlight(!c->subsGrid->IsOverlapHighlightEnabled());
+	}
+};
+
+struct review_replay_after_edit final : public validator_video_loaded {
+	CMD_NAME("review/replay_after_edit")
+	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
+	wxString StrMenu(const agi::Context *) const override { return to_wx("改后重播"); }
+	wxString StrDisplay(const agi::Context *) const override { return ""; }
+	wxString StrHelp() const override { return to_wx("改后重播：在编辑框修改本行离开后，从该行开头重新播放"); }
+
+	wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
+		static const char svg[] =
+			"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">"
+			"<path d=\"M12 4 A 8 8 0 1 0 20 12\" fill=\"none\" stroke=\"#27AE60\" stroke-width=\"2.5\" stroke-linecap=\"round\"/>"
+			"<polygon points=\"12,1 12,7 7,4\" fill=\"#27AE60\"/>"
+			"<path d=\"M11 13 L16 8 L18 10 L13 15 L10 16 Z\" fill=\"#E67E22\"/>"
+			"</svg>";
+		return wxBitmapBundle::FromSVG(svg, wxSize(height, height));
+	}
+
+	bool IsActive(const agi::Context *) override {
+		return OPT_GET("Tool/Playback/Review Replay After Edit")->GetBool();
+	}
+
+	void operator()(agi::Context *) override {
+		bool cur = OPT_GET("Tool/Playback/Review Replay After Edit")->GetBool();
+		OPT_SET("Tool/Playback/Review Replay After Edit")->SetBool(!cur);
+	}
+};
+
+struct review_smooth_preview final : public validator_video_loaded {
+	CMD_NAME("review/smooth_preview")
+	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
+	wxString StrMenu(const agi::Context *) const override { return to_wx("流畅预览"); }
+	wxString StrDisplay(const agi::Context *) const override { return ""; }
+	wxString StrHelp() const override { return to_wx("流畅预览：审校模式对 4K/2K 高清视频以 720P 极速预览，消除卡顿与音画脱节"); }
+
+	wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
+		static const char svg[] =
+			"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">"
+			"<rect x=\"2\" y=\"3\" width=\"20\" height=\"14\" rx=\"2\" fill=\"none\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
+			"<line x1=\"8\" y1=\"21\" x2=\"16\" y2=\"21\" stroke=\"#2980B9\" stroke-width=\"2\" stroke-linecap=\"round\"/>"
+			"<line x1=\"12\" y1=\"17\" x2=\"12\" y2=\"21\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
+			"<polygon points=\"13,5 7,12 12,12 11,16 17,9 12,9\" fill=\"#F39C12\"/>"
+			"</svg>";
+		return wxBitmapBundle::FromSVG(svg, wxSize(height, height));
+	}
+
+	bool IsActive(const agi::Context *) override {
+		return OPT_GET("Tool/Playback/Review Smooth Preview")->GetBool();
+	}
+
+	void operator()(agi::Context *c) override {
+		bool cur = OPT_GET("Tool/Playback/Review Smooth Preview")->GetBool();
+		OPT_SET("Tool/Playback/Review Smooth Preview")->SetBool(!cur);
+		c->videoController->UpdateSmoothPreview(true);
 	}
 };
 
@@ -827,6 +998,8 @@ namespace cmd {
 		reg(std::make_unique<video_cycle_subtitles_provider>());
 		reg(std::make_unique<video_detach>());
 		reg(std::make_unique<video_details>());
+		reg(std::make_unique<video_motion_track>());
+		reg(std::make_unique<video_shuffler>());
 		reg(std::make_unique<video_focus_seek>());
 		reg(std::make_unique<video_frame_copy>());
 		reg(std::make_unique<video_frame_copy_raw>());
@@ -852,6 +1025,9 @@ namespace cmd {
 		reg(std::make_unique<review_mode>());
 		reg(std::make_unique<review_play_pause>());
 		reg(std::make_unique<review_preview>());
+		reg(std::make_unique<review_overlap>());
+		reg(std::make_unique<review_replay_after_edit>());
+		reg(std::make_unique<review_smooth_preview>());
 		reg(std::make_unique<video_play_line>());
 		reg(std::make_unique<video_show_overscan>());
 		reg(std::make_unique<video_reset_pan>());

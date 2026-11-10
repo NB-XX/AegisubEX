@@ -97,9 +97,20 @@ class FFmpegSourceVideoProvider final : public VideoProvider, FFmpegSourceProvid
 	FFMS_ErrorInfo ErrInfo;         ///< FFMS error codes/messages
 	bool has_audio = false;
 
+	int OutputWidth = 0;
+	int OutputHeight = 0;
+	bool smooth_preview = false;
+
+	void ApplyOutputFormat();
 	void LoadVideo(agi::fs::path const& filename, ycbcr::Header colormatrix);
 
 public:
+	void SetSmoothPreview(bool enabled) override {
+		if (smooth_preview == enabled) return;
+		smooth_preview = enabled;
+		ApplyOutputFormat();
+	}
+	bool IsSmoothPreview() const override { return smooth_preview; }
 	FFmpegSourceVideoProvider(agi::fs::path const& filename, ycbcr::Header colormatrix, agi::BackgroundRunner *br);
 
 	void GetFrame(int n, VideoFrame &out) override;
@@ -239,6 +250,8 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, ycbcr::
 
 	Width  = TempFrame->EncodedWidth;
 	Height = TempFrame->EncodedHeight;
+	OutputWidth = Width;
+	OutputHeight = Height;
 	if (VideoInfo->SARDen > 0 && VideoInfo->SARNum > 0)
 		DAR = double(Width) * VideoInfo->SARNum / ((double)Height * VideoInfo->SARDen);
 	else
@@ -249,9 +262,7 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, ycbcr::
 
 	SetColorSpace(colormatrix);
 
-	const int TargetFormat[] = { FFMS_GetPixFmt("bgra"), -1 };
-	if (FFMS_SetOutputFormatV2(VideoSource, TargetFormat, Width, Height, FFMS_RESIZER_BICUBIC, &ErrInfo))
-		throw VideoOpenError(std::string("Failed to set output format: ") + ErrInfo.Buffer);
+	ApplyOutputFormat();
 
 	// get frame info data
 	FFMS_Track *FrameData = FFMS_GetTrackFromVideo(VideoSource);
@@ -287,6 +298,26 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, ycbcr::
 		Timecodes = agi::vfr::Framerate(TimecodesVector);
 }
 
+void FFmpegSourceVideoProvider::ApplyOutputFormat() {
+	if (!VideoSource) return;
+
+	if (smooth_preview && Height > 720) {
+		OutputHeight = 720;
+		OutputWidth = (static_cast<int64_t>(Width) * 720 / Height + 1) & ~1;
+	} else {
+		OutputWidth = Width;
+		OutputHeight = Height;
+	}
+
+	const int TargetFormat[] = { FFMS_GetPixFmt("bgra"), -1 };
+	int resizer = smooth_preview ? FFMS_RESIZER_FAST_BILINEAR : FFMS_RESIZER_BICUBIC;
+	if (FFMS_SetOutputFormatV2(VideoSource, TargetFormat, OutputWidth, OutputHeight, resizer, &ErrInfo)) {
+		OutputWidth = Width;
+		OutputHeight = Height;
+		FFMS_SetOutputFormatV2(VideoSource, TargetFormat, Width, Height, FFMS_RESIZER_BICUBIC, &ErrInfo);
+	}
+}
+
 void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
 	n = mid(0, n, GetFrameCount() - 1);
 
@@ -294,56 +325,59 @@ void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
 	if (!frame)
 		throw VideoDecodeError(std::string("Failed to retrieve frame: ") +  ErrInfo.Buffer);
 
-	out.data.assign(frame->Data[0], frame->Data[0] + frame->Linesize[0] * Height);
+	int cur_w = OutputWidth > 0 ? OutputWidth : Width;
+	int cur_h = OutputHeight > 0 ? OutputHeight : Height;
+
+	out.data.assign(frame->Data[0], frame->Data[0] + frame->Linesize[0] * cur_h);
 	out.flipped = false;
-	out.width = Width;
-	out.height = Height;
+	out.width = cur_w;
+	out.height = cur_h;
 	out.pitch = frame->Linesize[0];
 
 	// Handle flip
 	if (VideoInfo->Flip > 0)
-		for (int x = 0; x < Height; ++x)
-			for (int y = 0; y < Width / 2; ++y)
+		for (int x = 0; x < cur_h; ++x)
+			for (int y = 0; y < cur_w / 2; ++y)
 				for (int ch = 0; ch < 4; ++ch)
-					std::swap(out.data[frame->Linesize[0] * x + 4 * y + ch], out.data[frame->Linesize[0] * x + 4 * (Width - 1 - y) + ch]);
+					std::swap(out.data[frame->Linesize[0] * x + 4 * y + ch], out.data[frame->Linesize[0] * x + 4 * (cur_w - 1 - y) + ch]);
 
 	else if (VideoInfo->Flip < 0)
-		for (int x = 0; x < Height / 2; ++x)
-			for (int y = 0; y < Width; ++y)
+		for (int x = 0; x < cur_h / 2; ++x)
+			for (int y = 0; y < cur_w; ++y)
 				for (int ch = 0; ch < 4; ++ch)
-					std::swap(out.data[frame->Linesize[0] * x + 4 * y + ch], out.data[frame->Linesize[0] * (Height - 1 - x) + 4 * y + ch]);
+					std::swap(out.data[frame->Linesize[0] * x + 4 * y + ch], out.data[frame->Linesize[0] * (cur_h - 1 - x) + 4 * y + ch]);
 
 	// Handle rotation
 	if (VideoInfo->Rotation % 360 == 180 || VideoInfo->Rotation % 360 == -180) {
 		std::vector<unsigned char> data(std::move(out.data));
-		out.data.resize(Width * Height * 4);
-		for (int x = 0; x < Height; ++x)
-			for (int y = 0; y < Width; ++y)
+		out.data.resize(cur_w * cur_h * 4);
+		for (int x = 0; x < cur_h; ++x)
+			for (int y = 0; y < cur_w; ++y)
 				for (int ch = 0; ch < 4; ++ch)
-					out.data[4 * (Width * x + y) + ch] = data[frame->Linesize[0] * (Height - 1 - x) + 4 * (Width - 1 - y) + ch];
-		out.pitch = 4 * Width;
+					out.data[4 * (cur_w * x + y) + ch] = data[frame->Linesize[0] * (cur_h - 1 - x) + 4 * (cur_w - 1 - y) + ch];
+		out.pitch = 4 * cur_w;
 	}
 	else if (VideoInfo->Rotation % 180 == 90 || VideoInfo->Rotation % 360 == -270) {
 		std::vector<unsigned char> data(std::move(out.data));
-		out.data.resize(Width * Height * 4);
-		for (int x = 0; x < Width; ++x)
-			for (int y = 0; y < Height; ++y)
+		out.data.resize(cur_w * cur_h * 4);
+		for (int x = 0; x < cur_w; ++x)
+			for (int y = 0; y < cur_h; ++y)
 				for (int ch = 0; ch < 4; ++ch)
-					out.data[4 * (Height * x + y) + ch] = data[frame->Linesize[0] * y + 4 * (Width - 1 - x) + ch];
-		out.width = Height;
-		out.height = Width;
-		out.pitch = 4 * Height;
+					out.data[4 * (cur_h * x + y) + ch] = data[frame->Linesize[0] * y + 4 * (cur_w - 1 - x) + ch];
+		out.width = cur_h;
+		out.height = cur_w;
+		out.pitch = 4 * cur_h;
 	}
 	else if (VideoInfo->Rotation % 180 == 270 || VideoInfo->Rotation % 360 == -90) {
 		std::vector<unsigned char> data(std::move(out.data));
-		out.data.resize(Width * Height * 4);
-		for (int x = 0; x < Width; ++x)
-			for (int y = 0; y < Height; ++y)
+		out.data.resize(cur_w * cur_h * 4);
+		for (int x = 0; x < cur_w; ++x)
+			for (int y = 0; y < cur_h; ++y)
 				for (int ch = 0; ch < 4; ++ch)
-					out.data[4 * (Height * x + y) + ch] = data[frame->Linesize[0] * (Height - 1 - y) + 4 * x + ch];
-		out.width = Height;
-		out.height = Width;
-		out.pitch = 4 * Height;
+					out.data[4 * (cur_h * x + y) + ch] = data[frame->Linesize[0] * (cur_h - 1 - y) + 4 * x + ch];
+		out.width = cur_h;
+		out.height = cur_w;
+		out.pitch = 4 * cur_h;
 	}
 }
 }

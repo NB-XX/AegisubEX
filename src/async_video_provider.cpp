@@ -248,7 +248,7 @@ bool AsyncVideoProvider::NeedUpdate(std::vector<AssDialogueBase const*> const& v
 
 void AsyncVideoProvider::ProcAsync(uint_fast32_t req_version, bool check_updated) {
 	// Only actually produce the frame if there's no queued changes waiting
-	if (req_version < version || frame_number < 0) return;
+	if (req_version < version || frame_number < 0 || !subs) return;
 
 	std::vector<AssDialogueBase const*> visible_lines;
 	for (auto const& line : subs->Events) {
@@ -285,6 +285,20 @@ void AsyncVideoProvider::SetColorSpace(agi::ycbcr::Header matrix) {
 	worker->Async([this, matrix]() {
 		source_provider->SetColorSpace(matrix);
 	});
+}
+
+void AsyncVideoProvider::SetSmoothPreview(bool enabled) {
+	worker->Async([this, enabled]() {
+		source_provider->SetSmoothPreview(enabled);
+	});
+}
+
+bool AsyncVideoProvider::IsSmoothPreview() const {
+	bool ret = false;
+	worker->Sync([&] {
+		ret = source_provider->IsSmoothPreview();
+	});
+	return ret;
 }
 
 wxDEFINE_EVENT(EVT_FRAME_READY, FrameReadyEvent);

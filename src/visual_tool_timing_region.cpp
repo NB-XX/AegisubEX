@@ -23,6 +23,7 @@
 #include <wx/event.h>
 #include <wx/msgdlg.h>
 #include <wx/progdlg.h>
+#include "dbnet_detector.h"
 
 VisualToolTimingRegion::VisualToolTimingRegion(VideoDisplay *parent, agi::Context *context)
 : VisualToolBase(parent, context) { }
@@ -59,11 +60,42 @@ bool MatchLineToRegion(agi::Context *c, AssDialogue *line, PixelRegion region, i
 	int frame_count = provider->GetFrameCount();
 	if (frame_count <= 0 || region.x1 - region.x0 < 12 || region.y1 - region.y0 < 6) { set_status(kMatchNoPattern); return false; }
 	reference_frame = std::clamp(reference_frame, 0, frame_count - 1);
-	int stride_x = std::max(1, (region.x1 - region.x0 + 319) / 320);
-	int stride_y = std::max(1, (region.y1 - region.y0 + 127) / 128);
-	int grid_width = (region.x1 - region.x0 + stride_x - 1) / stride_x;
-	int grid_height = (region.y1 - region.y0 + stride_y - 1) / stride_y;
+
+	// Auto-tighten region: use DBNet (if available) to locate the exact bounding box
+	// of this specific subtitle line in the reference frame. This cuts away all surrounding
+	// background, preventing background light/movement from artificially sustaining similarity
+	// after the subtitle ends, and automatically adapts to varying subtitle lengths in batch mode.
+	auto ref_f = provider->GetFrame(reference_frame, c->videoController->TimeAtFrame(reference_frame), true);
+	double coord_scale_x = (provider->GetWidth() > 0 && ref_f->width > 0) ? (static_cast<double>(ref_f->width) / provider->GetWidth()) : 1.0;
+	double coord_scale_y = (provider->GetHeight() > 0 && ref_f->height > 0) ? (static_cast<double>(ref_f->height) / provider->GetHeight()) : 1.0;
+
+	if (DBNetDetector::Get().IsAvailable()) {
+		int s_x0 = static_cast<int>(std::round(region.x0 * coord_scale_x));
+		int s_y0 = static_cast<int>(std::round(region.y0 * coord_scale_y));
+		int s_x1 = static_cast<int>(std::round(region.x1 * coord_scale_x));
+		int s_y1 = static_cast<int>(std::round(region.y1 * coord_scale_y));
+		int out_x0 = s_x0, out_y0 = s_y0, out_x1 = s_x1, out_y1 = s_y1;
+		if (DBNetDetector::Get().GetTextBoundingBox(
+				ref_f->data.data(), ref_f->width, ref_f->height, ref_f->pitch, ref_f->flipped,
+				s_x0, s_y0, s_x1, s_y1,
+				out_x0, out_y0, out_x1, out_y1)) {
+			region.x0 = static_cast<int>(std::round(out_x0 / coord_scale_x));
+			region.y0 = static_cast<int>(std::round(out_y0 / coord_scale_y));
+			region.x1 = static_cast<int>(std::round(out_x1 / coord_scale_x));
+			region.y1 = static_cast<int>(std::round(out_y1 / coord_scale_y));
+		}
+	}
+	int video_h = provider->GetHeight();
+	double scale = (video_h > 360) ? (360.0 / static_cast<double>(video_h)) : 1.0;
+	int rw = region.x1 - region.x0;
+	int rh = region.y1 - region.y0;
+	int grid_width = std::max(8, static_cast<int>(std::round(rw * scale)));
+	int grid_height = std::max(4, static_cast<int>(std::round(rh * scale)));
 	size_t n_cells = static_cast<size_t>(grid_width) * grid_height;
+	double native_step_x = static_cast<double>(rw) / grid_width;
+	double native_step_y = static_cast<double>(rh) / grid_height;
+	bool use_box_filter = (scale <= 0.5);
+
 	int samples_done = 0;
 	bool cancelled = false;
 	MaskCache owned_cache;
@@ -73,11 +105,33 @@ bool MatchLineToRegion(agi::Context *c, AssDialogue *line, PixelRegion region, i
 		m.bright.reserve(n_cells);
 		m.dark.reserve(n_cells);
 		auto frame = provider->GetFrame(frame_no, c->videoController->TimeAtFrame(frame_no), true);
-		for (int gy = 0, y = region.y0; gy < grid_height; ++gy, y += stride_y) {
-			int row = frame->flipped ? frame->height - 1 - y : y;
-			for (int gx = 0, x = region.x0; gx < grid_width; ++gx, x += stride_x) {
-				auto p = frame->data.data() + row * frame->pitch + x * 4;
-				int b = p[0], g = p[1], r = p[2];
+		for (int gy = 0; gy < grid_height; ++gy) {
+			int cy = std::clamp(static_cast<int>(std::round((region.y0 + (gy + 0.5) * native_step_y) * coord_scale_y)), 0, frame->height - 1);
+			int cy1 = use_box_filter ? std::min(cy + 1, frame->height - 1) : cy;
+			int row0 = frame->flipped ? frame->height - 1 - cy : cy;
+			int row1 = frame->flipped ? frame->height - 1 - cy1 : cy1;
+			const uint8_t* row0_ptr = frame->data.data() + row0 * frame->pitch;
+			const uint8_t* row1_ptr = frame->data.data() + row1 * frame->pitch;
+
+			for (int gx = 0; gx < grid_width; ++gx) {
+				int cx = std::clamp(static_cast<int>(std::round((region.x0 + (gx + 0.5) * native_step_x) * coord_scale_x)), 0, frame->width - 1);
+				int cx1 = use_box_filter ? std::min(cx + 1, frame->width - 1) : cx;
+
+				const uint8_t* p00 = row0_ptr + cx * 4;
+				int r, g, b;
+				if (use_box_filter) {
+					const uint8_t* p01 = row0_ptr + cx1 * 4;
+					const uint8_t* p10 = row1_ptr + cx * 4;
+					const uint8_t* p11 = row1_ptr + cx1 * 4;
+					b = (p00[0] + p01[0] + p10[0] + p11[0]) >> 2;
+					g = (p00[1] + p01[1] + p10[1] + p11[1]) >> 2;
+					r = (p00[2] + p01[2] + p10[2] + p11[2]) >> 2;
+				} else {
+					b = p00[0];
+					g = p00[1];
+					r = p00[2];
+				}
+
 				int luma = (114 * b + 587 * g + 299 * r) / 1000;
 				int chroma = std::max({r, g, b}) - std::min({r, g, b});
 				// Bright glyph polarity: light or saturated fills (white/colour text
@@ -155,21 +209,23 @@ bool MatchLineToRegion(agi::Context *c, AssDialogue *line, PixelRegion region, i
 	auto choose_pattern = [&](std::vector<uint8_t> const& static_b, std::vector<uint8_t> const& static_d) -> bool {
 		int dyn_b = dyn_count(ref, false, static_b);
 		int dyn_d = dyn_count(ref, true, static_d);
-		if (dyn_b >= 8 || dyn_d >= 8) {
+		int min_req = std::max(8, static_cast<int>(n_cells * 0.012));
+		if (dyn_b >= min_req || dyn_d >= min_req) {
 			use_dark = dyn_d > dyn_b;
 			exclude = use_dark ? static_d : static_b;
 			reference_mask = use_dark ? ref.dark : ref.bright;
 			reference_pixels = use_dark ? dyn_d : dyn_b;
 			return true;
 		}
-		if (int bright_on = std::count(ref.bright.begin(), ref.bright.end(), uint8_t(1)); bright_on >= 12) {
+		int min_solid = std::max(10, static_cast<int>(n_cells * 0.015));
+		if (int bright_on = std::count(ref.bright.begin(), ref.bright.end(), uint8_t(1)); bright_on >= min_solid) {
 			use_dark = false;
 			exclude.assign(n_cells, 0);
 			reference_mask = ref.bright;
 			reference_pixels = bright_on;
 			return true;
 		}
-		if (int dark_on = std::count(ref.dark.begin(), ref.dark.end(), uint8_t(1)); dark_on >= 12) {
+		if (int dark_on = std::count(ref.dark.begin(), ref.dark.end(), uint8_t(1)); dark_on >= min_solid) {
 			use_dark = true;
 			exclude.assign(n_cells, 0);
 			reference_mask = ref.dark;
@@ -197,8 +253,8 @@ bool MatchLineToRegion(agi::Context *c, AssDialogue *line, PixelRegion region, i
 		if (hits >= 3) {
 			int seam_ms = c->videoController->TimeAtFrame(seam);
 			int dur_ms = std::max(1000, static_cast<int>(line->End) - static_cast<int>(line->Start));
-			left_limit = std::clamp(c->videoController->FrameAtTime(std::max(0, seam_ms - 1500), agi::vfr::START), 0, reference_frame);
-			right_limit = std::clamp(c->videoController->FrameAtTime(std::min(video_end, seam_ms + dur_ms + 6000), agi::vfr::END), reference_frame, frame_count - 1);
+			left_limit = std::clamp(c->videoController->FrameAtTime(std::max(0, seam_ms - 300), agi::vfr::START), 0, reference_frame);
+			right_limit = std::clamp(c->videoController->FrameAtTime(std::min(video_end, seam_ms + dur_ms + 1200), agi::vfr::END), reference_frame, frame_count - 1);
 		}
 	}
 
@@ -339,14 +395,14 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 	if (region.x1 - region.x0 < 12 || region.y1 - region.y0 < 6) return;
 
 	int frame_count = provider->GetFrameCount();
-	int base_similarity = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt(), 25, 95));
+	int base_similarity = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt(), 50, 95));
 	int rerun_step = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Rerun Step")->GetInt(), 5, 30));
 	// Matching in this workflow targets back-to-back subtitles, so the batch
 	// keeps the result non-overlapping: after the normal pass we find rows
 	// whose new interval swallowed a neighbour, re-run just those with a
 	// stricter similarity and search bounds that stop at the neighbour, and
 	// finally clamp whatever is left so consecutive lines only touch.
-	constexpr int neighbour_tol = 80; // ms of slack while re-running
+	constexpr int neighbour_tol = 0; // ms of slack while re-running (strict boundaries, no overlap)
 	// One shared frame decode cache for the whole batch: rows sit seconds
 	// apart, so after the first couple of rows every sample window is already
 	// decoded, and the conflict re-runs cost almost no new frames at all.
@@ -370,7 +426,7 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 	auto try_match = [&](AssDialogue *line, size_t pos, int similarity, int lo, int hi, int hint_frame = -1) {
 		int start = line->Start, end = line->End;
 		try {
-			if (MatchLineToRegion(context, line, region, ref_frame(line), start, end, similarity, lo, hi, nullptr, nullptr, &frame_cache, hint_frame))
+			if (MatchLineToRegion(context, line, region, ref_frame(line), start, end, similarity, lo, hi, nullptr, nullptr, nullptr, hint_frame))
 				cur[pos] = { start, end };
 		}
 		catch (...) { }
@@ -392,7 +448,7 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 		int hint = -1;
 		if (last_end_ms >= 0) {
 			int gap = static_cast<int>(line->Start) - last_end_ms;
-			if (gap >= -1500 && gap <= 1500)
+			if (gap >= -500 && gap <= 500)
 				hint = context->videoController->FrameAtTime(std::max(0, last_end_ms), agi::vfr::START);
 		}
 		try_match(line, pos, base_similarity, -1, -1, hint);
@@ -423,9 +479,11 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 				: _("Re-running collided rows with a stricter threshold..."))) break;
 			int similarity = std::min(95, base_similarity + round * rerun_step);
 			for (auto& [pos, b] : bounds) {
+				if (progress.WasCancelled()) { aborted = true; break; }
 				if (pos < order.size())
 					try_match(order[pos], pos, similarity, b.first, b.second);
 			}
+			if (aborted) break;
 		}
 		// Final guarantee: clamp the rows we changed so no overlap remains.
 		for (size_t i = 0; i < order.size(); ++i) {
@@ -533,7 +591,7 @@ void VisualToolTimingRegion::DetectInterval() {
 	}
 
 	int reference_frame = std::clamp(c->videoController->GetFrameN(), 0, frame_count - 1);
-	int minimum_similarity = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt(), 25, 95));
+	int minimum_similarity = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt(), 50, 95));
 
 	// Fresh decodes for one line: one ascending pass over the ~0.5 s lattice
 	// across the ±10 s window, plus a short forward walk refining each

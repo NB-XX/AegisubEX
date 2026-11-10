@@ -1887,6 +1887,38 @@ msgstr "互换所选的两行"
 msgid "swap lines"
 msgstr "互换行"
 
+#: ../src/command/grid.cpp:448
+msgid "Auto Align &Forward"
+msgstr "自动向前对齐(&F)"
+
+#: ../src/command/grid.cpp:449
+msgid "Auto Align Forward"
+msgstr "自动向前对齐"
+
+#: ../src/command/grid.cpp:450
+msgid "Set the start time of the second line to the end time of the first line"
+msgstr "将第二条轴的开始时间设置为第一条轴的结束时间"
+
+#: ../src/command/grid.cpp:468
+msgid "auto align forward"
+msgstr "自动向前对齐"
+
+#: ../src/command/grid.cpp:473
+msgid "Auto Align &Backward"
+msgstr "自动向后对齐(&B)"
+
+#: ../src/command/grid.cpp:474
+msgid "Auto Align Backward"
+msgstr "自动向后对齐"
+
+#: ../src/command/grid.cpp:475
+msgid "Set the end time of the first line to the start time of the second line"
+msgstr "将第一条轴的结束时间设置为第二条轴的开始时间"
+
+#: ../src/command/grid.cpp:493
+msgid "auto align backward"
+msgstr "自动向后对齐"
+
 #: ../src/command/help.cpp:47
 msgid "&Bug Tracker..."
 msgstr "Bug跟踪系统(&B)…"

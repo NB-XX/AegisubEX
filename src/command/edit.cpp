@@ -56,6 +56,7 @@
 #include <libaegisub/string.h>
 
 #include <algorithm>
+#include <set>
 #include <boost/algorithm/string.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/range/adaptor/filtered.hpp>
@@ -552,13 +553,54 @@ struct edit_find_replace final : public Command {
 };
 
 static void copy_lines(agi::Context *c) {
-	SetClipboard(join(c->selectionController->GetSortedSelection()
-		| transformed(static_cast<std::string(*)(AssDialogue*)>([](AssDialogue *d) { return d->GetEntryData(); })),
-		"\r\n"));
+	auto const& sel = c->selectionController->GetSelectedSet();
+	std::set<std::string> copy_groups;
+	for (auto d : sel) {
+		std::string const& eff = d->Effect.get();
+		if (eff.rfind("motion-group:", 0) == 0) {
+			copy_groups.insert(eff.substr(13));
+		}
+	}
+
+	std::vector<std::string> lines_data;
+	for (auto& diag : c->ass->Events) {
+		bool in_sel = !!sel.count(&diag);
+		bool in_group = false;
+		if (!in_sel && !copy_groups.empty()) {
+			std::string const& eff = diag.Effect.get();
+			if (eff.rfind("motion-frame:", 0) == 0 && copy_groups.count(eff.substr(13))) {
+				in_group = true;
+			}
+		}
+		if (in_sel || in_group) {
+			lines_data.push_back(diag.GetEntryData());
+		}
+	}
+
+	SetClipboard(boost::join(lines_data, "\r\n"));
 }
 
 static void delete_lines(agi::Context *c, wxString const& commit_message) {
 	auto const& sel = c->selectionController->GetSelectedSet();
+
+	std::set<std::string> deleted_groups;
+	for (auto d : sel) {
+		std::string const& eff = d->Effect.get();
+		if (eff.rfind("motion-group:", 0) == 0) {
+			deleted_groups.insert(eff.substr(13));
+		}
+	}
+
+	auto is_being_deleted = [&](const AssDialogue* d) {
+		if (sel.count(const_cast<AssDialogue*>(d))) return true;
+		if (!deleted_groups.empty()) {
+			std::string const& eff = d->Effect.get();
+			if (eff.rfind("motion-frame:", 0) == 0) {
+				if (deleted_groups.count(eff.substr(13))) return true;
+			}
+		}
+		return false;
+	};
 
 	// Find a line near the active line not being deleted to make the new active line
 	AssDialogue *pre_sel = nullptr;
@@ -566,7 +608,7 @@ static void delete_lines(agi::Context *c, wxString const& commit_message) {
 	bool hit_selection = false;
 
 	for (auto& diag : c->ass->Events) {
-		if (sel.count(&diag))
+		if (is_being_deleted(&diag))
 			hit_selection = true;
 		else if (hit_selection && !post_sel) {
 			post_sel = &diag;
@@ -581,8 +623,8 @@ static void delete_lines(agi::Context *c, wxString const& commit_message) {
 	// need to create a new dialogue line for it, and we can't select dialogue
 	// lines until after they're committed.
 	std::vector<std::unique_ptr<AssDialogue>> to_delete;
-	c->ass->Events.remove_and_dispose_if([&sel](AssDialogue const& e) {
-		return sel.count(const_cast<AssDialogue *>(&e));
+	c->ass->Events.remove_and_dispose_if([&](AssDialogue const& e) {
+		return is_being_deleted(&e);
 	}, [&](AssDialogue *e) {
 		to_delete.emplace_back(e);
 	});

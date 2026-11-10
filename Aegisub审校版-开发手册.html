@@ -338,7 +338,8 @@ pre code { background: none; border: 0; padding: 0; word-break: normal; }
         <li class="sub"><a href="#f07">F07 CPS / 字数排序</a></li>
         <li class="sub"><a href="#f08">F08 AI 内嵌翻译</a></li>
         <li class="sub"><a href="#f09">F09 字幕格式审查</a></li>
-        <li class="sub"><a href="#f10">F10 修复清单</a></li>
+        <li class="sub"><a href="#f10">F10 智能人声切分与说话人分离</a></li>
+        <li class="sub"><a href="#f11">F11 修复与基础设施清单</a></li>
       </ol>
     </li>
     <li><a href="#lua">Lua 自动化脚本</a></li>
@@ -444,7 +445,7 @@ cmd /c 'build-local\rebuild.cmd &gt; build-local\my_build.log 2&gt;&amp;1'</code
 <!-- ============ 功能详解 ============ -->
 <section class="chapter" id="features">
   <p class="eyebrow">03 · FEATURES</p>
-  <h2>功能改动详解（F01–F10）</h2>
+  <h2>功能改动详解（F01–F11）</h2>
 
   <!-- F01 -->
   <div class="feat" id="f01">
@@ -485,7 +486,18 @@ cmd /c 'build-local\rebuild.cmd &gt; build-local\my_build.log 2&gt;&amp;1'</code
     <p><strong>VideoController 新增状态机：</strong><code>review_mode / review_preview / review_was_playing / review_saved_frame / focus_paused / review_edit_time</code>，信号 <code>ReviewModeChange</code> 供 base_grid、subs_edit_box、video_box 订阅。<code>OnActiveLineChanged</code> 在审校模式下跳过 Stop+JumpToTime（这是"切换选中不打断播放"的实现点）。<code>Stop()</code> 在预览中会转为取消预览。</p>
     <p><strong>预览一条字幕：</strong><code>PlayReviewPreview(start,end,AssFile*)</code> 把当前内存字幕文件（含未保存修改）塞进视频 provider，播 <code>[start−1s, end+1s]</code>，结束或取消时 <code>FinishReviewPreview()</code> 恢复 provider 的常规字幕源并跳回原帧。可重入（预览中再预览不丢初始状态）。</p>
     <p><strong>焦点联动：</strong>编辑框侧 <code>subs_edit_box</code> 用 120ms <code>wxTimer</code> 轮询 <code>wxWindow::FindFocus()</code> 上溯父链判断焦点是否在编辑区/音频盒（注释说明：Scintilla 原生控件会吞 SET/KILL_FOCUS，只能轮询），焦点入→视频自动暂停，焦点出→从暂停帧续播；若期间该行内容被提交过（<code>review_edit_time</code> 有值）且开了"改后重播"，先 seek 到该时间再播。</p>
-    <p><strong>视频盒三个审校专属按钮</strong>（<code>video_box.cpp</code>，默认隐藏）：预览±1秒（跑 <code>PlayReviewPreview</code>）、重叠高亮开/关、改后重播开/关；进入审校模式还会把 <code>video/opt/autoscroll</code> 工具栏按钮隐藏（依赖 F10 的 <code>toolbar::SetCommandVisible</code>）。</p>
+    <p><strong>视频工具栏审校专属 SVG 图标按钮组</strong>（<code>video_box.cpp</code> 与 <code>src/command/video.cpp</code>，通过 <code>toolbar::SetCommandVisible</code> 动态切换显示，避免挤压时轴与缩放框）：
+      <ul>
+        <li><code>review/preview</code>（单句预览 ±1秒）：两端刻度包围的播放图标，调用 <code>PlayReviewPreview</code>；</li>
+        <li><code>review/overlap</code>（重叠行高亮）：重叠时间轴与冲突标线图标，toggle 切换；</li>
+        <li><code>review/replay_after_edit</code>（改后重播）：循环回放加编辑铅笔图标，toggle 切换；</li>
+        <li><code>review/smooth_preview</code>（流畅预览）：显示器加极速闪电图标，toggle 切换；</li>
+        <li><code>ai/style_quick</code>（样式快切面板）：调色盘与快速切换指示图标，toggle 切换右侧快速样式面板与数字快捷键。</li>
+      </ul>
+      全部按钮采用矢量 SVG 渲染（<code>wxBitmapBundle::FromSVG</code>），开启激活时直接复用 Aegisub 原生工具栏的标准高亮/凹陷状态（<code>COMMAND_TOGGLE</code> + <code>wxITEM_CHECK</code>）。进入审校模式时会自动隐藏 <code>video/opt/autoscroll</code>，退出审校模式时自动收起审校图标并恢复自动滚屏。
+    </p>
+    <p><strong>4K/超清视频动态降采样流畅预览（Smooth Preview）：</strong>原生 Aegisub 播放 4K 视频时每一帧都由 CPU 把 4K YUV 转为 33.2MB 的未压缩 BGRA 裸数据，每秒吞吐量高达 1~2 GB/s，造成严重的 CPU 软解饱和与 OpenGL 显存同步阻塞。审校模式开启时，FFMS2 内部的 <code>sws_scale</code> 在色彩转换时直接输出 720P（<code>FAST_BILINEAR</code>），单帧内存从 33.2MB 骤降至 3.68MB（锐减 89%），libass 光栅化耗时缩短 75%，显存上传开销减少近 90%，UI 与播放丝滑不卡顿。视频原生宽高、坐标系统与对帧精度依然保留原生 4K，零精度损失。</p>
+    <p><strong>样式快切面板（Quick Style）：</strong>复用右下角辅助面板（Tab 2），开启后按数字键 <code>1</code>–<code>0</code> 极速切换当前行的 ASS 样式；未播放/暂停状态下方向键上下移动画面自动同步跳转至该行起始帧，而在审校模式播放中上下切行绝不打断视频播放（面板支持鼠标自由拖拽排序前 10 个样式，配置持久化）。</p>
     <p><strong>网格高亮（base_grid）：</strong>正在播放的行琥珀底 <code>255,222,150</code> + 2px 描边 <code>230,135,20</code>；重叠行粉底 <code>255,218,222</code>；开启重叠高亮时活动行及其碰撞行加 <code>232,133,140</code>。重叠映射 <code>UpdateOverlapRows()</code> 按起止时间扫描线标记，时间编辑提交（COMMIT_DIAG_TIME）后即时刷新。优先级：选中 &gt; 播放行 &gt; 注释行。</p>
     <div class="blk warn"><span class="tag">坑</span>
       <ul>
@@ -505,7 +517,9 @@ cmd /c 'build-local\rebuild.cmd &gt; build-local\my_build.log 2&gt;&amp;1'</code
     <p><strong>入口：</strong>视频工具 <code>video/tool/frame_match</code>（工具栏按钮 + 菜单"对帧助手"，二次按下退回十字工具），批量命令 <code>video/tool/frame_match_batch</code>（需视频 provider + 非空网格选区，走静态 <code>VisualToolTimingRegion::BatchMatchSelection()</code>）。参考帧 = <strong>当前显示帧</strong>，用户要先停在字幕可见的帧再拖框。</p>
     <p><strong>匹配算法</strong>（<code>visual_tool_timing_region.cpp</code>，核心 <code>MatchLineToRegion()</code>）：</p>
     <ul>
-      <li>区域按脚本分辨率→归一化坐标→采样为 ≤320×128 的网格（<code>GetEffectiveLayoutResolution</code> 处理脚本/视频分辨率差异；<code>frame-&gt;flipped</code> 已处理）。</li>
+      <li><strong>360P 归一化采样对齐（4K 与 1080P 同速）：</strong>引入高度基准比率 <code>scale = 360.0 / video_h</code>，将采样网格一律归一化到等效 360P 空间（约 1,500 ~ 3,500 cells），杜绝 4K 原生像素网格带来的数万采样单元暴增与 Cache Miss；采样时采用 <strong>2×2 盒状滤波（Box Filter）抗锯齿</strong>，滤除下采样单像素噪点。</li>
+      <li><strong>收紧淡入淡出与重叠容差：</strong>收窄接缝探测窗口至 <code>seam−300ms / dur+1200ms</code>；消除批量重叠容差（<code>neighbour_tol = 0ms</code> 严格防行间渗漏）；DBNet 文本检测框 Padding 收缩至 2~6px 且置信度提升至 0.50，切除外围背景噪点；相似度下限提升至 50%（默认 70%）。</li>
+      <li>双向坐标无缝映射：根据实际交付帧与原生视频分辨率比例自动推导 <code>coord_scale_x/y</code>，完全免疫并兼容流畅预览（720P）模式。</li>
       <li>双极性二值掩码：亮字（luma≥215 或 RGBmax≥180 且 chroma≥90）与暗字（luma≤60），兼容白字和黑描边字。</li>
       <li>相似度用 Dice：同位置 <code>200·|交| / (|参考|+|当前|)</code>。</li>
       <li><strong>抗干扰：</strong>±6 秒按约 1 秒取样做"持久性扫描"，点亮率 ≥85% 的格子判为台标/横幅等静态元素剔除；参考帧图案至少 12 个有效格才开跑。</li>
@@ -583,11 +597,20 @@ cmd /c 'build-local\rebuild.cmd &gt; build-local\my_build.log 2&gt;&amp;1'</code
       <p>旧 Lua 原型（AI辅助翻译.lua）经外部进程调 ffmpeg，链路长且脆。经评估改为原生内嵌（维护者拍板"直接开工内嵌版"）：截图走内存帧缓冲，音频走 AudioProvider 切片，网络走已在构建内的 libcurl。Lua 版保留对照至稳定后删除。</p>
     </div>
     <p><strong>入口：</strong>字幕菜单两项（自动置灰逻辑：截图翻译需视频 provider；音频翻译需音频 provider + 非空选区），命令在 <code>command/ai.cpp</code>，全部实现在 <code>ai_assistant.cpp</code>（约 915 行，含对话框与 curl 层）。</p>
-    <p><strong>接口约定：</strong>OpenAI 兼容 <code>POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions</code>。视觉消息 = <code>image_url</code>(<code>data:image/png;base64,…</code>) + text；音频消息 = <code>input_audio</code>(<code>data:;base64,WAV</code>, format wav) + text；模型名含 "omni" 必须 <code>stream:true</code>，按 SSE <code>data: …</code> 行拼接 <code>choices.0.delta.content</code> 直到 <code>[DONE]</code>。提示词与 Lua 版逐字一致（<code>原文=… 译文=…</code> 格式 + 同套 extract_translation 提取兜底，保证两版输出可对照）。</p>
+    <p><strong>接口约定：</strong>OpenAI 兼容 <code>POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions</code>。视觉消息 = <code>image_url</code>(<code>data:image/png;base64,…</code>) + text；音频消息 = <code>input_audio</code>（DashScope 端使用 <code>data:audio/wav;base64,...</code>；Gemini / OpenAI 官方标准端自动使用纯 Base64，彻底杜绝 <code>Failed to base64-decode audio data</code> 错误，format: wav）+ text；模型名含 "omni" 必须 <code>stream:true</code>，按 SSE <code>data: …</code> 行拼接 <code>choices.0.delta.content</code> 直到 <code>[DONE]</code>。提示词与 Lua 版逐字一致（<code>原文=… 译文=…</code> 格式 + 同套 extract_translation 提取兜底，保证两版输出可对照）。</p>
     <p><strong>功能 1 区域截图：</strong>主线程抓当前帧（<code>AsyncVideoProvider::GetFrame(frame, time, raw)</code> → wxImage），按百分比裁剪（默认读 F03 的 Frame Match 区域，面板区域四项可改）、>1280 宽则缩放、PNG 编码 → base64 → 后台线程请求。结果"原文/译文"两个可编辑框，"写入当前行"→ <code>line-&gt;Text = …</code>（换行转 <code>\N</code>）→ <code>COMMIT_DIAG_TEXT</code>。</p>
-    <p><strong>功能 2 音频翻译：</strong>每条选中行按 <code>[start−PadStart, end+PadEnd]</code> 从 <code>agi::AudioProvider</code> 取样本，内存里降混单声道 + 线性重采样 16k + 拼 WAV 头（不依赖 ffmpeg；provider 本身带锁线程安全），逐条串行请求，进度"第 d/N 条完成"，汇总可编辑框；"写入选中行"按【第N条 h:m:s】块解析回填。</p>
+    <p><strong>功能 2 音频翻译（表格视图与多选填入）：</strong>每条选中行按 <code>[start−PadStart, end+PadEnd]</code> 从 <code>agi::AudioProvider</code> 切取音频样本重采样为 16k 单声道 WAV。识别结果在右侧面板通过 <code>wxListCtrl</code> 表格一行一行列出（序号、时间、转写原文、翻译结果、状态），支持原生复选框。用户可<strong>多选行或勾选后点击【填入所选/勾选行】</strong>，或点击【一键替换全部】，彻底避免原本纯文本块的混乱与误填。</p>
+    <p><strong>结果复制与导出支持：</strong>针对列表控件原生交互增强，全面支持转写原文与翻译结果的多渠道便捷复制：
+      <ul>
+        <li><strong>快捷键复制：</strong>音频列表聚焦时支持标准 <code>Ctrl+C</code> 复制当前选中行（未高亮选中时自动采用勾选行），支持 <code>Ctrl+A</code> 全选；</li>
+        <li><strong>右键上下文菜单：</strong>在列表上右键弹出丰富菜单，提供「复制所选行（原文+译文 制表符分隔）」、「仅复制所选译文」、「仅复制所选原文」、「复制所选详细内容（带序号与时间）」、「全选行/勾选所选/取消勾选」以及「复制全部行」等选项；默认制表符分隔格式可无缝直接粘贴到 Excel 等表格中自动分列；</li>
+        <li><strong>界面一键按钮：</strong>在音频翻译按钮栏新增【复制所选】按钮，截图翻译栏新增【复制译文】按钮，配有详细浮动提示（Tooltip），点击即可一键复制到系统剪贴板并给出状态反馈。</li>
+      </ul>
+    </p>
     <p><strong>线程与生命周期：</strong>模态框（ShowModal）保证请求期间项目/视频/音频对象不会变化；<code>alive_/cancel_</code> 为 <code>shared_ptr&lt;atomic&lt;bool&gt;&gt;</code>，后台结果回投主线程前一律查 <code>!*</code>alive 直接丢弃；取消按钮置 cancel，curl 的 <code>XFERINFOFUNCTION</code> 轮询它；运行中点关闭会被 veto（提示"正在取消后台任务，请稍候…"），"强制关闭"按钮直接 EndModal；析构兜底置位双标志。</p>
-    <p><strong>配置与密钥：</strong><code>Tool/AI/*</code> 12 个键（见第 05 章）。密钥输入框 <code>wxTE_PASSWORD</code> 打码；密钥为空时自动读 <code>%APPDATA%\ai_translate.conf</code> 的 <code>api_key=</code> 行继承 Lua 版配置。区域/模型/语言改动即时写回 OPT。</p>
+    <p><strong>方案管理与模型代理（Profile & Proxy）：</strong>
+支持多方案自由新建与切换，端口 URL（Endpoint）、API 密钥、视觉模型、音频模型、原语言（支持自动检测、韩语、日语、英语等指定语言，彻底避免语音混淆识别）、目标语言、HTTP/SOCKS5 代理及认证、超时秒数与失败自动重试次数封装为一套独立方案组（持久化在 <code>Tool/AI/Profiles</code> JSON 串并与当前激活方案 <code>Tool/AI/Active Profile</code> 联动）。
+网络请求自动识别超时（CURLE_OPERATION_TIMEDOUT）与 HTTP 429 速率限制，进行带指数退避的自动重试，极大提升弱网与大并发批处理稳定性。</p>
     <p><strong>错误话术（全部中文、面向操作者）：</strong>401→"API 密钥无效…"；403→"模型未开通：…请到百炼控制台「模型广场」开通该模型后重试"；429→频率/额度；网络失败→"请检查网络或代理"；SSE 空内容/JSON 异常附原始响应前 300 字符。</p>
     <div class="blk warn"><span class="tag">坑</span>
       <ul>
@@ -607,7 +630,34 @@ cmd /c 'build-local\rebuild.cmd &gt; build-local\my_build.log 2&gt;&amp;1'</code
 
   <!-- F10 -->
   <div class="feat" id="f10">
-    <div class="feat-head"><span class="fid">F10</span><h4>修复与基础设施清单</h4></div>
+    <div class="feat-head"><span class="fid">F10</span><h4>智能人声切分与说话人分离（Silero VAD v5 + 声纹比对）</h4></div>
+    <div class="blk note"><span class="tag">动机</span>
+      <p>在字幕制作与听译流程中，用户需要将长音频中的人声精准切分为独立时间轴片段（无需转写文本，仅需说话起止时间）。核心诉求包括：① <strong>发声时刻零迟滞紧贴（pad_start = 0ms）</strong>；② <strong>语音结束自然延长 200ms（pad_end = 200ms）</strong>；③ <strong>强力过滤背景音乐、歌曲人声与游戏音效（爆炸、枪声、UI 杂音）</strong>；④ <strong>说话人精准分离</strong>：既支持根据工程中已标注角色名（Actor）的既有时间轴学习音色声纹，自动匹配识别结果并过滤非目标人声/背景杂音；也支持无参考模式下的 K-Means 说话人聚类（Speaker 1, 2...）。</p>
+    </div>
+    <p><strong>入口：</strong>主工具栏独立按钮 <code>ai/vad_diarize</code>（话筒与声波矢量图标）、主菜单【音频】▸【智能人声切分与说话人分离…】、AI 翻译面板底部【人声切分…】按钮。</p>
+    <p><strong>Silero VAD v5 深度学习引擎（<code>src/silero_vad.h</code>）：</strong>
+      <ul>
+        <li><strong>动态运行时加载：</strong>通过 <code>onnxruntime_c_api.h</code> 动态调用 <code>onnxruntime.dll</code>，零外部静态 .lib 链接依赖，官方最新 v5 ONNX 权重（2.3MB）；</li>
+        <li><strong>流式分块状态机：</strong>以 512 采样点（16kHz 下 32ms）为单位流式推断，LSTM 隐藏状态 <code>state: float32[2, 1, 128]</code> 跨块流转；双阈值迟滞状态机（进入阈值 0.50，退出阈值 0.35），最短语音持续 250ms，最短静音合并 250ms；</li>
+        <li><strong>时码紧密贴合规则：</strong>起点紧贴真实发声瞬态（0ms 偏移），终点向后延伸 200ms，消除截断感与拖尾。</li>
+      </ul>
+    </p>
+    <p><strong>背景乐与游戏音效过滤（24维声纹与谐波度检测）：</strong>
+      游戏爆炸、枪击、UI 杂音等瞬态能量大，极易引发传统能量检测假阳性。系统在 C++ 层内建 <code>TimbreExtractor</code>，利用 Aegisub 原生 <code>FFT</code> 抽取 24 维归一化声学特征向量（20 维 Mel 滤波器组 200–7500Hz、基音周期 Pitch F0、归一化自相关谐波度 NACF Harmonicity、频谱质心与高低频能量比）。人类说话具有强周期性谐波（谐波度 > 0.35），而游戏音效缺乏谐波结构（谐波度 < 0.22）。开启【过滤背景音乐与游戏音效】后，在 VAD 检出区间内校验谐波声学特征，将非语言爆破音与嘈杂背景干净滤除。
+    </p>
+    <p><strong>说话人分离模式（Speaker Diarization）：</strong>
+      <ul>
+        <li><strong>参考已知角色音色匹配（Reference Matching）：</strong>自动扫描工程中已填入 <code>Actor</code> 角色名的字幕行，按角色汇总切片音频并计算 24 维声纹质心（Centroid）。推断时计算余弦相似度（Cosine Similarity），自动赋予最高匹配角色；支持【过滤未匹配语音】（低于相似度阈值默认 0.65 判定为背景歌声或 NPC 杂音，直接丢弃）；</li>
+        <li><strong>无监督聚类（K-Means Clustering）：</strong>未标注工程下，自动运行多轮 K-Means 聚类为 Speaker 1、Speaker 2……；</li>
+        <li><strong>仅切分时间轴（VAD Only）：</strong>仅导出时间轴片段，不分配说话人名称。</li>
+      </ul>
+    </p>
+    <p><strong>输出选项与安全撤销：</strong>支持【追加到当前字幕末尾】与【替换所有对话行】；操作前自动记录 <code>AssFile::COMMIT_DIAG_ADDREM</code> 历史快照，Ctrl+Z 随时一键撤销。执行界面配有实时进度条、耗时与句数统计，且支持随时安全取消。</p>
+  </div>
+
+  <!-- F11 -->
+  <div class="feat" id="f11">
+    <div class="feat-head"><span class="fid">F11</span><h4>修复与基础设施清单</h4></div>
     <div class="tblwrap"><table>
       <thead><tr><th>#</th><th>位置</th><th>问题 → 修复</th></tr></thead>
       <tbody>
@@ -665,6 +715,13 @@ cmd /c 'build-local\rebuild.cmd &gt; build-local\my_build.log 2&gt;&amp;1'</code
       <tr><td><code>Tool/AI/Target Lang</code></td><td>string · <code>"简体中文"</code></td><td>目标语言</td><td>AI 对话框</td></tr>
       <tr><td><code>Tool/AI/Region X0/Y0/X1/Y1</code></td><td>double · <code>0 / 70 / 100 / 100</code></td><td>截图裁剪百分比（默认沿用画面下部字幕区）</td><td>AI 对话框；初始值优先取 Frame Match 区域</td></tr>
       <tr><td><code>Tool/AI/Pad Start · Pad End</code></td><td>int · <code>300</code> (ms)</td><td>音频切片前后延长</td><td>AI 对话框</td></tr>
+      <tr><td><code>Tool/AI/VAD Threshold</code></td><td>int · <code>50</code></td><td>VAD 人声触发灵敏度百分比（30–80）</td><td>人声切分对话框</td></tr>
+      <tr><td><code>Tool/AI/VAD Pad Start · Pad End</code></td><td>int · <code>0 / 200</code> (ms)</td><td>切分时间轴起始紧贴 / 结束延长（默认 0ms / 200ms）</td><td>人声切分对话框</td></tr>
+      <tr><td><code>Tool/AI/VAD Min Speech · Min Silence</code></td><td>int · <code>250 / 250</code> (ms)</td><td>最短连续说话长度 / 最短静音停顿合并时长</td><td>人声切分对话框</td></tr>
+      <tr><td><code>Tool/AI/VAD Noise Filter</code></td><td>bool · <code>true</code></td><td>是否开启背景音乐与游戏音效声学谐波过滤</td><td>人声切分对话框</td></tr>
+      <tr><td><code>Tool/AI/VAD Speaker Mode</code></td><td>int · <code>0</code></td><td>说话人模式（0:参考角色匹配, 1:自动聚类, 2:仅切分）</td><td>人声切分对话框</td></tr>
+      <tr><td><code>Tool/AI/VAD Ref Threshold</code></td><td>int · <code>65</code></td><td>参考说话人音色相似度判定阈值百分比（40–90）</td><td>人声切分对话框</td></tr>
+      <tr><td><code>Tool/AI/VAD Filter Unmatched</code></td><td>bool · <code>true</code></td><td>参考模式下是否丢弃与已选角色均不匹配的片段</td><td>人声切分对话框</td></tr>
     </tbody>
   </table></div>
 </section>
@@ -680,16 +737,21 @@ cmd /c 'build-local\rebuild.cmd &gt; build-local\my_build.log 2&gt;&amp;1'</code
       <tr><td><code>video/tool/frame_match_batch</code></td><td>批量对帧</td><td>视频工具栏、视频菜单</td><td>需 provider + 非空选区</td></tr>
       <tr><td><code>review/mode</code></td><td>字幕审校模式</td><td>视频工具栏、视频菜单</td><td>toggle，需载入视频；图标暂借 spellcheck_toolbutton</td></tr>
       <tr><td><code>review/play_pause</code></td><td>继续或暂停播放（不改行）</td><td>—（快捷键）</td><td><span class="pill">Ctrl-P</span>（迁移自 video/play）</td></tr>
-      <tr><td><code>review/preview</code></td><td>预览当前字幕</td><td>—（快捷键）</td><td><span class="pill">Ctrl-Shift-P</span></td></tr>
+      <tr><td><code>review/preview</code></td><td>单句预览 (±1秒)</td><td>视频工具栏、快捷键</td><td><span class="pill">Ctrl-Shift-P</span>；SVG 矢量图标</td></tr>
+      <tr><td><code>review/overlap</code></td><td>重叠行高亮</td><td>视频工具栏</td><td>toggle；SVG 矢量图标，高亮互相重叠的字幕行</td></tr>
+      <tr><td><code>review/replay_after_edit</code></td><td>改后重播</td><td>视频工具栏</td><td>toggle；SVG 矢量图标，修改过本行离开后从头重播</td></tr>
+      <tr><td><code>review/smooth_preview</code></td><td>流畅预览 (4K/2K极速)</td><td>视频工具栏</td><td>toggle；SVG 矢量图标，审校模式以 720P 极速预览消除卡顿</td></tr>
+      <tr><td><code>ai/style_quick</code></td><td>样式快切面板</td><td>视频工具栏、主工具栏</td><td>toggle；SVG 矢量图标，呼出右侧样式排序与快捷键面板</td></tr>
       <tr><td><code>edit/batch/apply_tags</code></td><td>批量预设标签…</td><td>字幕 ▸ Batch Override Tags</td><td>非空选区</td></tr>
       <tr><td><code>edit/batch/remove_tags</code></td><td>批量删除标签…</td><td>同上</td><td>非空选区</td></tr>
       <tr><td><code>grid/sort/cps</code>（+/selected）</td><td>按 CPS 排序</td><td>两个排序子菜单</td><td>全表 / 选中</td></tr>
       <tr><td><code>grid/sort/text_length</code>（+/selected）</td><td>按字数排序</td><td>同上</td><td>—</td></tr>
       <tr><td><code>ai/frame_translate</code></td><td>区域截图翻译</td><td>字幕菜单（platform）</td><td>需视频 provider</td></tr>
       <tr><td><code>ai/audio_translate</code></td><td>音频翻译选中行</td><td>字幕菜单（platform）</td><td>需音频 provider + 非空选区</td></tr>
+      <tr><td><code>ai/vad_diarize</code></td><td>智能人声切分与说话人分离…</td><td>主工具栏、音频菜单、AI面板</td><td>需音频 provider；独立声波图标；唤起 Silero VAD 对话框</td></tr>
     </tbody>
   </table></div>
-  <p>工具栏新增（video 条）：frame_match、frame_match_batch、review/mode、倍速下拉；视频盒隐藏按钮：预览±1秒 / 重叠高亮 / 改后重播（仅审校模式显示）。macOS 菜单只补了 Batch Override Tags 子菜单（AI/对帧未上 mac 菜单）。</p>
+  <p>工具栏新增（video 条）：frame_match、frame_match_batch、review/mode、倍速下拉；审校子功能工具栏图标：单句预览±1秒 / 重叠高亮 / 改后重播 / 流畅预览 / 样式快切（仅审校模式在视频工具栏动态显示）。macOS 菜单只补了 Batch Override Tags 子菜单（AI/对帧未上 mac 菜单）。</p>
 </section>
 
 <!-- ============ 文件索引 ============ -->
@@ -700,7 +762,10 @@ cmd /c 'build-local\rebuild.cmd &gt; build-local\my_build.log 2&gt;&amp;1'</code
   <div class="tblwrap"><table>
     <thead><tr><th>文件</th><th>用途</th></tr></thead>
     <tbody>
-      <tr><td><code>src/ai_assistant.h</code> / <code>*.cpp</code>*</td><td>F08 AI 内嵌翻译全部实现（对话框 + curl 层 + base64/WAV 工具）</td></tr>
+      <tr><td><code>src/ai_assistant.h</code> / <code>*.cpp</code>*</td><td>F08 AI 内嵌翻译全部实现 + F10 智能人声切分对话框</td></tr>
+      <tr><td><code>src/silero_vad.h</code></td><td>Silero VAD v5 ONNX 运行时包装、24维声纹提取、游戏音效谐波过滤与说话人分离引擎</td></tr>
+      <tr><td><code>src/onnxruntime_c_api.h</code></td><td>ONNX Runtime C API 动态加载头文件（免静态 .lib 链接）</td></tr>
+      <tr><td><code>build-local/silero_vad.onnx</code></td><td>Silero VAD v5 预训练 ONNX 深度学习模型权重文件（2.3MB）</td></tr>
       <tr><td><code>src/command/ai.cpp</code>*</td><td>两个 AI 命令注册 + <code>cmd::init_ai()</code>（command.cpp 调用它）</td></tr>
       <tr><td><code>src/visual_tool_timing_region.h</code> / <code>*.cpp</code>*</td><td>F03 对帧可视工具 + 批量匹配引擎</td></tr>
       <tr><td><code>src/ass_style_fx.h</code> / <code>*.cpp</code>*</td><td>F04 样式特效展开/折叠</td></tr>

@@ -44,11 +44,6 @@
         "time/frame/current",
         "",
         "tool/style/manager",
-        "video/tool/frame_match",
-        "video/tool/frame_match_batch",
-        "ai/frame_translate",
-        "ai/audio_translate",
-        "review/mode",
         "subtitle/properties",
         "subtitle/attachment",
         "tool/font_collector",
@@ -64,13 +59,32 @@
         "subtitle/spellcheck",
         "",
         "app/options",
-        "grid/tag/cycle_hiding"
+        "grid/tag/cycle_hiding",
+        "",
+        "video/tool/frame_match",
+        "video/tool/frame_match_batch",
+        "video/tool/motion_track",
+        "video/shuffler",
+        "",
+        "ai/frame_translate",
+        "ai/audio_translate",
+        "ai/vad_diarize",
+        "ai/style_quick",
+        "",
+        "review/mode"
     ],
     "video" : [
         "video/play",
         "video/play/line",
         "video/stop",
-        "video/opt/autoscroll"
+        "video/opt/autoscroll",
+        "",
+        "review/preview",
+        "review/overlap",
+        "review/replay_after_edit",
+        "review/smooth_preview",
+        "",
+        "ai/style_quick"
     ],
     "visual_tools" : [
         "video/tool/cross",
@@ -80,6 +94,8 @@
         "video/tool/scale",
         "video/tool/clip",
         "video/tool/vector_clip",
+        "",
+        "video/tool/motion_track",
         "",
         "help/video"
     ]

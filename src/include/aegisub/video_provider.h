@@ -55,6 +55,10 @@ public:
 	/// matrix makes no sense or the input isn't YCbCr.
 	virtual void SetColorSpace(agi::ycbcr::Header matrix)=0;
 
+	/// Set downsampled smooth preview mode (useful for fast playback of 4K/2K videos)
+	virtual void SetSmoothPreview(bool) { }
+	virtual bool IsSmoothPreview() const { return false; }
+
 	// Override the following methods to get video information:
 	virtual int GetFrameCount() const=0;			///< Get total number of frames
 	virtual int GetWidth() const=0;					///< Returns the video width in pixels

@@ -59,6 +59,14 @@ public:
 		return master->SetColorSpace(m);
 	}
 
+	void SetSmoothPreview(bool enabled) override {
+		cache.clear();
+		master->SetSmoothPreview(enabled);
+	}
+	bool IsSmoothPreview() const override {
+		return master->IsSmoothPreview();
+	}
+
 	int GetFrameCount() const override             { return master->GetFrameCount(); }
 	int GetWidth() const override                  { return master->GetWidth(); }
 	int GetHeight() const override                 { return master->GetHeight(); }

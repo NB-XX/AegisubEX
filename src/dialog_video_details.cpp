@@ -78,7 +78,7 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 	auto frame_match_sizer = new wxStaticBoxSizer(wxHORIZONTAL, &d, _("Frame Match Assistant"));
 	auto frame_match_box = frame_match_sizer->GetStaticBox();
 	frame_match_sizer->Add(new wxStaticText(frame_match_box, -1, _("Minimum region similarity (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
-	auto minimum_similarity = new wxSpinCtrl(frame_match_box, -1, wxEmptyString, wxDefaultPosition, wxSize(90, -1), wxSP_ARROW_KEYS, 25, 95, OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt());
+	auto minimum_similarity = new wxSpinCtrl(frame_match_box, -1, wxEmptyString, wxDefaultPosition, wxSize(90, -1), wxSP_ARROW_KEYS, 50, 95, OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt());
 	frame_match_sizer->Add(minimum_similarity, 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 12);
 	frame_match_sizer->Add(new wxStaticText(frame_match_box, -1, _("Rerun similarity step (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
 	auto rerun_step = new wxSpinCtrl(frame_match_box, -1, wxEmptyString, wxDefaultPosition, wxSize(90, -1), wxSP_ARROW_KEYS, 5, 30, OPT_GET("Tool/Frame Match/Rerun Step")->GetInt());

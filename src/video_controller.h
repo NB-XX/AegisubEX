@@ -143,6 +143,7 @@ public:
 	bool IsPlaying() const { return playback.IsRunning(); }
 	bool IsReviewMode() const { return review_mode; }
 	void SetReviewMode(bool active);
+	void UpdateSmoothPreview(bool refresh = false);
 	void PlayReviewPreview(int start_ms, int end_ms, AssFile const *subtitles);
 	/// @brief Report whether the keyboard focus is inside the editing areas
 	/// (subtitle edit box or audio display). In review mode, moving focus in
