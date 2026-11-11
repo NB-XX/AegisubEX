@@ -263,17 +263,17 @@ void Video(wxTreebook *book, Preferences *parent) {
 	wxArrayString choice_misycbcr(3, cmisycbcr_arr);
 	p->OptionChoice(ycbcr, _("Match video's YCbCr Matrix on open"), choice_misycbcr, "Video/YCbCr Matrix Mismatch");
 
-	auto framematch = p->PageSizer(_("Frame Match & SubtitleOCR (视觉对帧与望言OCR)"));
+	auto framematch = p->PageSizer(to_wx("视觉对帧与望言OCR (Frame Match & SubtitleOCR)"));
 	const wxString cengine_arr[] = {
-		_("Auto (DBNet -> Classic; SubtitleOCR if available)"),
-		_("SubtitleOCR External Engine (望言OCR)"),
-		_("Native DBNet Neural Matcher (内置深度学习)"),
-		_("Classic Native Pixel Matcher (经典原生像素/Dice)")
+		to_wx("自动模式 (推荐: 内建DBNet -> 原生像素; 望言就绪时优选)"),
+		to_wx("望言OCR 外部引擎 (SubtitleOCR C-ABI)"),
+		to_wx("内建 DBNet 神经网络 (GPU硬件加速)"),
+		to_wx("经典原生双极性像素模式 (Dice掩模匹配)")
 	};
 	wxArrayString choice_engine(4, cengine_arr);
-	p->OptionChoice(framematch, _("Match Engine"), choice_engine, "Tool/Frame Match/Engine");
-	p->OptionAdd(framematch, _("SubtitleOCR Path"), "Tool/Frame Match/SubtitleOCR Path");
-	p->OptionAdd(framematch, _("Minimum similarity (%)"), "Tool/Frame Match/Minimum Similarity");
+	p->OptionChoice(framematch, to_wx("对帧匹配引擎"), choice_engine, "Tool/Frame Match/Engine");
+	p->OptionAdd(framematch, to_wx("望言OCR (subocr.dll) 目录路径"), "Tool/Frame Match/SubtitleOCR Path");
+	p->OptionAdd(framematch, _("Minimum region similarity (%)"), "Tool/Frame Match/Minimum Similarity");
 	p->OptionAdd(framematch, _("Rerun similarity step (%)"), "Tool/Frame Match/Rerun Step");
 
 	p->SetSizerAndFit(p->sizer);

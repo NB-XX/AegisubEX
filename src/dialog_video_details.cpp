@@ -79,17 +79,17 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 
 	video_sizer->Add(fg);
 
-	auto frame_match_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, _("Frame Match Assistant"));
+	auto frame_match_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, to_wx("视觉对帧助手 (Frame Match)"));
 	auto frame_match_box = frame_match_sizer->GetStaticBox();
 
 	// 1. Engine Choice
 	auto engine_row = new wxBoxSizer(wxHORIZONTAL);
-	engine_row->Add(new wxStaticText(frame_match_box, -1, _("Match Engine:")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	engine_row->Add(new wxStaticText(frame_match_box, -1, to_wx("匹配引擎:")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
 	wxArrayString engine_choices;
-	engine_choices.Add(_("Auto (SubtitleOCR -> DBNet -> Classic)"));
-	engine_choices.Add(_("SubtitleOCR External Engine (望言OCR)"));
-	engine_choices.Add(_("Native DBNet Neural Matcher (内置深度学习)"));
-	engine_choices.Add(_("Classic Native Pixel Matcher (经典原生像素/Dice)"));
+	engine_choices.Add(to_wx("自动模式 (推荐: 内建DBNet -> 原生像素; 望言就绪时优选)"));
+	engine_choices.Add(to_wx("望言OCR 外部引擎 (SubtitleOCR C-ABI)"));
+	engine_choices.Add(to_wx("内建 DBNet 神经网络 (GPU硬件加速)"));
+	engine_choices.Add(to_wx("经典原生双极性像素模式 (Dice掩模匹配)"));
 	auto engine_choice = new wxChoice(frame_match_box, -1, wxDefaultPosition, wxDefaultSize, engine_choices);
 	int cur_engine = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 3));
 	engine_choice->SetSelection(cur_engine);
@@ -98,12 +98,12 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 
 	// 2. SubtitleOCR Path
 	auto path_row = new wxBoxSizer(wxHORIZONTAL);
-	path_row->Add(new wxStaticText(frame_match_box, -1, _("SubtitleOCR Path:")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	path_row->Add(new wxStaticText(frame_match_box, -1, to_wx("望言OCR路径:")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
 	auto subocr_path_ctrl = new wxTextCtrl(frame_match_box, -1, to_wx(OPT_GET("Tool/Frame Match/SubtitleOCR Path")->GetString()));
 	path_row->Add(subocr_path_ctrl, 1, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 5);
 	auto browse_btn = new wxButton(frame_match_box, -1, _("Browse..."), wxDefaultPosition, wxSize(70, -1));
 	browse_btn->Bind(wxEVT_BUTTON, [&d, subocr_path_ctrl](wxCommandEvent&) {
-		wxDirDialog dlg(&d, _("Select SubtitleOCR (望言OCR) Directory"), subocr_path_ctrl->GetValue());
+		wxDirDialog dlg(&d, to_wx("选择望言OCR (SubtitleOCR) 所在目录"), subocr_path_ctrl->GetValue());
 		if (dlg.ShowModal() == wxID_OK) {
 			subocr_path_ctrl->SetValue(dlg.GetPath());
 		}
@@ -138,21 +138,21 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 }
 
 void ShowFrameMatchSettingsDialog(agi::Context *c) {
-	wxDialog d(c->parent, -1, _("Frame Match & SubtitleOCR Settings"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+	wxDialog d(c->parent, -1, to_wx("对帧模式与望言OCR配置 (Frame Match & SubtitleOCR)"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
 
 	auto main_sizer = new wxBoxSizer(wxVERTICAL);
 
-	auto frame_match_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, _("Frame Match Engine Configuration"));
+	auto frame_match_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, to_wx("对帧匹配引擎设置"));
 	auto frame_match_box = frame_match_sizer->GetStaticBox();
 
 	// 1. Engine Choice
 	auto engine_row = new wxBoxSizer(wxHORIZONTAL);
-	engine_row->Add(new wxStaticText(frame_match_box, -1, _("Match Engine:")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	engine_row->Add(new wxStaticText(frame_match_box, -1, to_wx("匹配引擎:")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
 	wxArrayString engine_choices;
-	engine_choices.Add(_("Auto (DBNet -> Classic; SubtitleOCR if available)"));
-	engine_choices.Add(_("SubtitleOCR External Engine (望言OCR)"));
-	engine_choices.Add(_("Native DBNet Neural Matcher (内置深度学习)"));
-	engine_choices.Add(_("Classic Native Pixel Matcher (经典原生像素/Dice)"));
+	engine_choices.Add(to_wx("自动模式 (推荐: 内建DBNet -> 原生像素; 望言就绪时优选)"));
+	engine_choices.Add(to_wx("望言OCR 外部引擎 (SubtitleOCR C-ABI)"));
+	engine_choices.Add(to_wx("内建 DBNet 深度学习 (DirectML GPU加速)"));
+	engine_choices.Add(to_wx("经典原生双极性像素模式 (Dice掩模匹配)"));
 	auto engine_choice = new wxChoice(frame_match_box, -1, wxDefaultPosition, wxDefaultSize, engine_choices);
 	int cur_engine = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 3));
 	engine_choice->SetSelection(cur_engine);
@@ -167,29 +167,29 @@ void ShowFrameMatchSettingsDialog(agi::Context *c) {
 	auto update_engine_tip = [engine_choice, engine_tip]() {
 		int sel = engine_choice->GetSelection();
 		if (sel == 0) {
-			engine_tip->SetLabel(_("Auto: Prioritizes built-in DBNet neural detection; falls back to classic pixel matching. Uses SubtitleOCR if DLL is loaded."));
+			engine_tip->SetLabel(to_wx("自动: 优先使用内建DBNet神经网络检测；无特征时自动回退经典像素；若配置了有效望言OCR则优先调用。"));
 		} else if (sel == 1) {
-			engine_tip->SetLabel(_("SubtitleOCR: Calls external subocr.dll C-ABI pipeline. Requires valid subocr.dll directory."));
+			engine_tip->SetLabel(to_wx("望言OCR: 专门调用外部 subocr.dll C-ABI 管道进行对帧，需指定包含开发接口库的目录。"));
 		} else if (sel == 2) {
-			engine_tip->SetLabel(_("Native DBNet: Uses embedded neural text confidence via DirectML GPU acceleration."));
+			engine_tip->SetLabel(to_wx("内建DBNet: 纯进程内基于 DirectML 神经网络模型检测文字笔画与置信度，无需外部依赖。"));
 		} else {
-			engine_tip->SetLabel(_("Classic Native Pixel: Uses original dual-polarity mask and Dice similarity matching."));
+			engine_tip->SetLabel(to_wx("经典原生像素: 采用原本的双极性极值二值化与 Dice 相似度匹配算法，原汁原味。"));
 		}
 	};
 	update_engine_tip();
 	engine_choice->Bind(wxEVT_CHOICE, [update_engine_tip](wxCommandEvent&) { update_engine_tip(); });
 
 	// 2. SubtitleOCR Path
-	auto subocr_box_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, _("SubtitleOCR (望言OCR) Integration"));
+	auto subocr_box_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, to_wx("望言OCR (SubtitleOCR) 接口集成"));
 	auto subocr_box = subocr_box_sizer->GetStaticBox();
 
 	auto path_row = new wxBoxSizer(wxHORIZONTAL);
-	path_row->Add(new wxStaticText(subocr_box, -1, _("Directory Path:")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	path_row->Add(new wxStaticText(subocr_box, -1, to_wx("目录路径:")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
 	auto subocr_path_ctrl = new wxTextCtrl(subocr_box, -1, to_wx(OPT_GET("Tool/Frame Match/SubtitleOCR Path")->GetString()));
 	path_row->Add(subocr_path_ctrl, 1, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 5);
 	auto browse_btn = new wxButton(subocr_box, -1, _("Browse..."), wxDefaultPosition, wxSize(75, -1));
 	path_row->Add(browse_btn, 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 5);
-	auto test_btn = new wxButton(subocr_box, -1, _("Test DLL"), wxDefaultPosition, wxSize(75, -1));
+	auto test_btn = new wxButton(subocr_box, -1, to_wx("检测 DLL"), wxDefaultPosition, wxSize(75, -1));
 	path_row->Add(test_btn, 0, wxALIGN_CENTRE_VERTICAL);
 	subocr_box_sizer->Add(path_row, 0, wxEXPAND | wxALL, 6);
 
@@ -199,7 +199,7 @@ void ShowFrameMatchSettingsDialog(agi::Context *c) {
 	auto update_status = [subocr_path_ctrl, status_text](bool probe = false) {
 		std::string path_u8 = from_wx(subocr_path_ctrl->GetValue());
 		if (path_u8.empty()) {
-			status_text->SetLabel(_("Status: No SubtitleOCR path configured (using built-in neural / pixel engine)."));
+			status_text->SetLabel(to_wx("状态: 未配置望言OCR路径 (默认使用内建神经网络 / 像素引擎)"));
 			status_text->SetForegroundColour(wxColour(110, 110, 110));
 			return;
 		}
@@ -207,17 +207,17 @@ void ShowFrameMatchSettingsDialog(agi::Context *c) {
 			SubocrEngine::Get().Load(path_u8);
 		}
 		if (SubocrEngine::Get().IsAvailable()) {
-			status_text->SetLabel(wxString::Format(_("Status: subocr.dll loaded and verified (%s)"), wxString(SubocrEngine::Get().GetLoadedPath())));
+			status_text->SetLabel(wxString::Format(to_wx("状态: 已成功载入并验证 subocr.dll (%s)"), wxString(SubocrEngine::Get().GetLoadedPath())));
 			status_text->SetForegroundColour(wxColour(0, 130, 0));
 		} else {
-			status_text->SetLabel(_("Status: subocr.dll not found in this folder (please select directory containing dev-libs subocr.dll)."));
+			status_text->SetLabel(to_wx("状态: 该目录下未找到有效的 subocr.dll (请选择包含开发库的目录)"));
 			status_text->SetForegroundColour(wxColour(180, 50, 0));
 		}
 	};
 	update_status(false);
 
 	browse_btn->Bind(wxEVT_BUTTON, [&d, subocr_path_ctrl, update_status](wxCommandEvent&) {
-		wxDirDialog dlg(&d, _("Select SubtitleOCR (望言OCR) Directory"), subocr_path_ctrl->GetValue());
+		wxDirDialog dlg(&d, to_wx("选择望言OCR (SubtitleOCR) 所在目录"), subocr_path_ctrl->GetValue());
 		if (dlg.ShowModal() == wxID_OK) {
 			subocr_path_ctrl->SetValue(dlg.GetPath());
 			update_status(true);
@@ -229,7 +229,7 @@ void ShowFrameMatchSettingsDialog(agi::Context *c) {
 	});
 
 	// 3. Similarity & Rerun step
-	auto sim_box_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, _("Matching Thresholds"));
+	auto sim_box_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, to_wx("匹配参数与阈值"));
 	auto sim_box = sim_box_sizer->GetStaticBox();
 	auto sim_row = new wxBoxSizer(wxHORIZONTAL);
 	sim_row->Add(new wxStaticText(sim_box, -1, _("Minimum region similarity (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);

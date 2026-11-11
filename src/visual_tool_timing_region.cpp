@@ -745,13 +745,13 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 		if (context->frame) {
 			int engine_mode = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 3));
 			wxString mode_label;
-			if (engine_mode == 0) mode_label = _("Auto (自动: DBNet/像素)");
-			else if (engine_mode == 1) mode_label = _("SubtitleOCR (望言)");
-			else if (engine_mode == 2) mode_label = _("Native DBNet (内建神经网络)");
-			else mode_label = _("Classic Pixel (经典原生像素)");
+			if (engine_mode == 0) mode_label = to_wx("自动模式 (DBNet/像素)");
+			else if (engine_mode == 1) mode_label = to_wx("望言OCR");
+			else if (engine_mode == 2) mode_label = to_wx("内建DBNet神经网络");
+			else mode_label = to_wx("经典原生双极性像素");
 
 			context->frame->SetStatusText(wxString::Format(
-				_("Batch frame match completed: %d rows updated [Mode: %s]"),
+				to_wx("批量对帧完成：共更新 %d 行 [模式: %s]"),
 				changed, mode_label));
 		}
 	}
@@ -843,10 +843,10 @@ void VisualToolTimingRegion::DetectInterval() {
 
 	int engine_mode = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 3));
 	wxString mode_label;
-	if (engine_mode == 0) mode_label = _("Auto (自动: DBNet/像素)");
-	else if (engine_mode == 1) mode_label = _("SubtitleOCR (望言)");
-	else if (engine_mode == 2) mode_label = _("Native DBNet (内建神经网络)");
-	else mode_label = _("Classic Pixel (经典原生像素)");
+	if (engine_mode == 0) mode_label = to_wx("自动模式 (DBNet/像素)");
+	else if (engine_mode == 1) mode_label = to_wx("望言OCR");
+	else if (engine_mode == 2) mode_label = to_wx("内建DBNet神经网络");
+	else mode_label = to_wx("经典原生双极性像素");
 
 	// Fresh decodes for one line: one ascending pass over the ~0.5 s lattice
 	// across the ±10 s window, plus a short forward walk refining each
@@ -855,8 +855,8 @@ void VisualToolTimingRegion::DetectInterval() {
 	// usually decode far fewer.
 	int total_work = 66;
 	wxProgressDialog progress(
-		wxString::Format(_("Frame Match Assistant [%s]"), mode_label),
-		wxString::Format(_("Comparing subtitle pattern with %s..."), mode_label),
+		wxString::Format(to_wx("对帧助手 [%s]"), mode_label),
+		wxString::Format(to_wx("正在使用 %s 扫描匹配字幕区间..."), mode_label),
 		total_work, parent, wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_CAN_ABORT | wxPD_ELAPSED_TIME);
 
 	int new_start = 0, new_end = 0;
@@ -889,13 +889,13 @@ void VisualToolTimingRegion::DetectInterval() {
 	Commit(_("match subtitle timing to picked region"));
 
 	wxString used_desc;
-	if (engine_used == 1) used_desc = _("SubtitleOCR (望言OCR)");
-	else if (engine_used == 2) used_desc = _("Native DBNet Neural (内建DBNet神经网络)");
-	else used_desc = _("Classic Native Pixel (经典原生双极性像素)");
+	if (engine_used == 1) used_desc = to_wx("望言OCR (SubtitleOCR)");
+	else if (engine_used == 2) used_desc = to_wx("内建DBNet神经网络 (DirectML)");
+	else used_desc = to_wx("经典原生双极性像素 (Dice)");
 
 	if (c->frame) {
 		c->frame->SetStatusText(wxString::Format(
-			_("Visual frame match succeeded: %s - %s [Engine: %s]"),
+			to_wx("视觉对帧完成：%s - %s [引擎: %s]"),
 			to_wx(agi::Time(new_start).GetAssFormatted()),
 			to_wx(agi::Time(new_end).GetAssFormatted()),
 			used_desc));
