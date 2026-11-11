@@ -137,6 +137,15 @@ bool AegisubApp::OnInit() {
 	SetAppName("aegisub");
 #endif
 
+#ifdef __WXMSW__
+	typedef HRESULT (WINAPI *SetCurrentProcessExplicitAppUserModelID_t)(PCWSTR);
+	if (HMODULE shell32 = GetModuleHandleW(L"shell32.dll")) {
+		if (auto pfn = (SetCurrentProcessExplicitAppUserModelID_t)GetProcAddress(shell32, "SetCurrentProcessExplicitAppUserModelID")) {
+			pfn(L"Aegisub.Aegisub");
+		}
+	}
+#endif
+
 	// The logger isn't created on demand on background threads, so force it to
 	// be created now
 	(void)wxLog::GetActiveTarget();

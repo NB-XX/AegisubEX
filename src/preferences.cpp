@@ -263,6 +263,19 @@ void Video(wxTreebook *book, Preferences *parent) {
 	wxArrayString choice_misycbcr(3, cmisycbcr_arr);
 	p->OptionChoice(ycbcr, _("Match video's YCbCr Matrix on open"), choice_misycbcr, "Video/YCbCr Matrix Mismatch");
 
+	auto framematch = p->PageSizer(_("Frame Match & SubtitleOCR (视觉对帧与望言OCR)"));
+	const wxString cengine_arr[] = {
+		_("Auto (DBNet -> Classic; SubtitleOCR if available)"),
+		_("SubtitleOCR External Engine (望言OCR)"),
+		_("Native DBNet Neural Matcher (内置深度学习)"),
+		_("Classic Native Pixel Matcher (经典原生像素/Dice)")
+	};
+	wxArrayString choice_engine(4, cengine_arr);
+	p->OptionChoice(framematch, _("Match Engine"), choice_engine, "Tool/Frame Match/Engine");
+	p->OptionAdd(framematch, _("SubtitleOCR Path"), "Tool/Frame Match/SubtitleOCR Path");
+	p->OptionAdd(framematch, _("Minimum similarity (%)"), "Tool/Frame Match/Minimum Similarity");
+	p->OptionAdd(framematch, _("Rerun similarity step (%)"), "Tool/Frame Match/Rerun Step");
+
 	p->SetSizerAndFit(p->sizer);
 }
 

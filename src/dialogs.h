@@ -78,3 +78,4 @@ void ShowSpellcheckerDialog(agi::Context *c);
 void ShowStyleManagerDialog(agi::Context *c);
 void ShowTimingProcessorDialog(agi::Context *c);
 void ShowVideoDetailsDialog(agi::Context *c);
+void ShowFrameMatchSettingsDialog(agi::Context *c);

@@ -273,6 +273,17 @@ struct video_details final : public validator_video_loaded {
 	}
 };
 
+struct video_frame_match_settings final : public Command {
+	CMD_NAME("video/frame_match_settings")
+	wxString StrMenu(const agi::Context *) const override { return to_wx("对帧模式与望言OCR设置 (Frame Match Settings)..."); }
+	wxString StrDisplay(const agi::Context *) const override { return to_wx("对帧模式与望言OCR设置"); }
+	wxString StrHelp() const override { return to_wx("设置视觉对帧引擎(自动/望言OCR/内建DBNet/经典像素)及望言OCR路径"); }
+
+	void operator()(agi::Context *c) override {
+		ShowFrameMatchSettingsDialog(c);
+	}
+};
+
 struct video_motion_track final : public validator_video_loaded {
 	CMD_NAME("video/motion_track")
 	wxString StrMenu(const agi::Context *) const override { return to_wx("运动追踪与相对位移 (Motion Tracking)..."); }
@@ -998,6 +1009,7 @@ namespace cmd {
 		reg(std::make_unique<video_cycle_subtitles_provider>());
 		reg(std::make_unique<video_detach>());
 		reg(std::make_unique<video_details>());
+		reg(std::make_unique<video_frame_match_settings>());
 		reg(std::make_unique<video_motion_track>());
 		reg(std::make_unique<video_shuffler>());
 		reg(std::make_unique<video_focus_seek>());

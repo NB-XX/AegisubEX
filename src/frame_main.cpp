@@ -140,7 +140,21 @@ FrameMain::FrameMain()
 
 	StartupLog("Set icon");
 #ifdef _WIN32
-	SetIcon(wxICON(wxicon));
+	HINSTANCE hInst = GetModuleHandle(nullptr);
+	HICON hBig = (HICON)::LoadImage(hInst, L"wxicon", IMAGE_ICON, ::GetSystemMetrics(SM_CXICON), ::GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR);
+	HICON hSmall = (HICON)::LoadImage(hInst, L"wxicon", IMAGE_ICON, ::GetSystemMetrics(SM_CXSMICON), ::GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
+	if (hBig || hSmall) {
+		wxIcon iconBig, iconSmall;
+		if (hBig) iconBig.CreateFromHICON(hBig);
+		if (hSmall) iconSmall.CreateFromHICON(hSmall);
+		wxIconBundle bundle;
+		if (iconSmall.IsOk()) bundle.AddIcon(iconSmall);
+		if (iconBig.IsOk()) bundle.AddIcon(iconBig);
+		if (!bundle.IsEmpty()) SetIcons(bundle);
+		else SetIcon(wxICON(wxicon));
+	} else {
+		SetIcon(wxICON(wxicon));
+	}
 #else
 	wxIcon icon;
 	icon.CopyFromBitmap(GETIMAGE(wxicon));

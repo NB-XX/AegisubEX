@@ -11,6 +11,8 @@
 #include "video_controller.h"
 #include "video_display.h"
 #include "video_frame.h"
+#include "frame_main.h"
+#include <libaegisub/ass/time.h>
 
 #include <algorithm>
 #include <cmath>
@@ -541,7 +543,7 @@ bool MatchLineDBNetNeural(agi::Context *c, AssDialogue *line, PixelRegion region
 bool MatchLineToRegion(agi::Context *c, AssDialogue *line, PixelRegion region, int reference_frame,
 	int& new_start, int& new_end, int minimum_similarity, int bound_lo_ms = -1, int bound_hi_ms = -1,
 	const std::function<bool(int samples)>& on_sample = nullptr, int* status = nullptr, MaskCache* shared_cache = nullptr,
-	int chain_hint_frame = -1) {
+	int chain_hint_frame = -1, int* out_engine_used = nullptr) {
 	int engine_mode = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 3));
 	// 0: Auto (DBNet -> Classic; SubtitleOCR if available)
 	// 1: SubtitleOCR External Engine (望言OCR)
@@ -566,6 +568,7 @@ bool MatchLineToRegion(agi::Context *c, AssDialogue *line, PixelRegion region, i
 						new_start = s_ms;
 						new_end = e_ms;
 						if (status) *status = kMatchOk;
+						if (out_engine_used) *out_engine_used = 1;
 						return true;
 					}
 				}
@@ -583,6 +586,7 @@ bool MatchLineToRegion(agi::Context *c, AssDialogue *line, PixelRegion region, i
 		if (MatchLineDBNetNeural(c, line, region, reference_frame, new_start, new_end,
 				minimum_similarity, bound_lo_ms, bound_hi_ms, on_sample, &neural_status, chain_hint_frame)) {
 			if (status) *status = neural_status;
+			if (out_engine_used) *out_engine_used = 2;
 			return true;
 		}
 		if (engine_mode == 2) {
@@ -592,8 +596,10 @@ bool MatchLineToRegion(agi::Context *c, AssDialogue *line, PixelRegion region, i
 	}
 
 	// 模式 3: 经典原生像素 / Dice 掩模对帧（原版方案保留备选）
-	return MatchLineNativePixel(c, line, region, reference_frame, new_start, new_end,
+	bool matched = MatchLineNativePixel(c, line, region, reference_frame, new_start, new_end,
 		minimum_similarity, bound_lo_ms, bound_hi_ms, on_sample, status, shared_cache, chain_hint_frame);
+	if (matched && out_engine_used) *out_engine_used = 3;
+	return matched;
 }
 }
 
@@ -734,8 +740,21 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 		line->End = cur[pos].second;
 		++changed;
 	}
-	if (changed)
+	if (changed) {
 		context->ass->Commit(_("batch match subtitle timings"), AssFile::COMMIT_DIAG_TIME);
+		if (context->frame) {
+			int engine_mode = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 3));
+			wxString mode_label;
+			if (engine_mode == 0) mode_label = _("Auto (自动: DBNet/像素)");
+			else if (engine_mode == 1) mode_label = _("SubtitleOCR (望言)");
+			else if (engine_mode == 2) mode_label = _("Native DBNet (内建神经网络)");
+			else mode_label = _("Classic Pixel (经典原生像素)");
+
+			context->frame->SetStatusText(wxString::Format(
+				_("Batch frame match completed: %d rows updated [Mode: %s]"),
+				changed, mode_label));
+		}
+	}
 }
 
 void VisualToolTimingRegion::ClearRegion() {
@@ -822,22 +841,33 @@ void VisualToolTimingRegion::DetectInterval() {
 	int reference_frame = std::clamp(c->videoController->GetFrameN(), 0, frame_count - 1);
 	int minimum_similarity = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt(), 50, 95));
 
+	int engine_mode = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 3));
+	wxString mode_label;
+	if (engine_mode == 0) mode_label = _("Auto (自动: DBNet/像素)");
+	else if (engine_mode == 1) mode_label = _("SubtitleOCR (望言)");
+	else if (engine_mode == 2) mode_label = _("Native DBNet (内建神经网络)");
+	else mode_label = _("Classic Pixel (经典原生像素)");
+
 	// Fresh decodes for one line: one ascending pass over the ~0.5 s lattice
 	// across the ±10 s window, plus a short forward walk refining each
 	// boundary. The matcher reports every frame it actually decodes, and
 	// clamps at this total. Batch runs share a decode cache, so later rows
 	// usually decode far fewer.
 	int total_work = 66;
-	wxProgressDialog progress(_("Frame Match Assistant"), _("Comparing the whole subtitle-region pattern in both directions..."), total_work, parent, wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_CAN_ABORT | wxPD_ELAPSED_TIME);
+	wxProgressDialog progress(
+		wxString::Format(_("Frame Match Assistant [%s]"), mode_label),
+		wxString::Format(_("Comparing subtitle pattern with %s..."), mode_label),
+		total_work, parent, wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_CAN_ABORT | wxPD_ELAPSED_TIME);
 
 	int new_start = 0, new_end = 0;
 	int status = kMatchOk;
+	int engine_used = 0;
 	bool ok = false;
 	MaskCache cache;
 	try {
 		ok = MatchLineToRegion(c, line, PixelRegion{x0, y0, x1, y1}, reference_frame, new_start, new_end,
 			minimum_similarity, -1, -1,
-			[&](int samples) { return progress.Update(std::min(samples, total_work)); }, &status, &cache);
+			[&](int samples) { return progress.Update(std::min(samples, total_work)); }, &status, &cache, -1, &engine_used);
 	}
 	catch (std::exception const& e) {
 		wxMessageBox(_("Could not scan video frames: ") + to_wx(e.what()), _("Frame Match Assistant"), wxOK | wxICON_ERROR, parent);
@@ -857,4 +887,17 @@ void VisualToolTimingRegion::DetectInterval() {
 	line->Start = new_start;
 	line->End = new_end;
 	Commit(_("match subtitle timing to picked region"));
+
+	wxString used_desc;
+	if (engine_used == 1) used_desc = _("SubtitleOCR (望言OCR)");
+	else if (engine_used == 2) used_desc = _("Native DBNet Neural (内建DBNet神经网络)");
+	else used_desc = _("Classic Native Pixel (经典原生双极性像素)");
+
+	if (c->frame) {
+		c->frame->SetStatusText(wxString::Format(
+			_("Visual frame match succeeded: %s - %s [Engine: %s]"),
+			to_wx(agi::Time(new_start).GetAssFormatted()),
+			to_wx(agi::Time(new_end).GetAssFormatted()),
+			used_desc));
+	}
 }

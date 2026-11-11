@@ -88,6 +88,7 @@
         { "recent" : "Video" },
         { "command" : "video/open/dummy" },
         { "command" : "video/details" },
+        { "command" : "video/frame_match_settings", "text" : "对帧模式与望言OCR设置 (Frame Match Settings)..." },
         { "command" : "video/motion_track", "text" : "运动追踪与相对位移 (Motion Tracking)..." },
         { "command" : "video/shuffler", "text" : "按字幕切分/合并视频 (Video Shuffler)..." },
         {},

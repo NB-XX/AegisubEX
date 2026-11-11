@@ -33,6 +33,7 @@
 #include "include/aegisub/context.h"
 #include "options.h"
 #include "project.h"
+#include "subocr_engine.h"
 
 #include <libaegisub/ass/time.h>
 
@@ -133,5 +134,128 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 		OPT_SET("Tool/Frame Match/SubtitleOCR Path")->SetString(from_wx(subocr_path_ctrl->GetValue()));
 		OPT_SET("Tool/Frame Match/Minimum Similarity")->SetInt(minimum_similarity->GetValue());
 		OPT_SET("Tool/Frame Match/Rerun Step")->SetInt(rerun_step->GetValue());
+	}
+}
+
+void ShowFrameMatchSettingsDialog(agi::Context *c) {
+	wxDialog d(c->parent, -1, _("Frame Match & SubtitleOCR Settings"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+
+	auto main_sizer = new wxBoxSizer(wxVERTICAL);
+
+	auto frame_match_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, _("Frame Match Engine Configuration"));
+	auto frame_match_box = frame_match_sizer->GetStaticBox();
+
+	// 1. Engine Choice
+	auto engine_row = new wxBoxSizer(wxHORIZONTAL);
+	engine_row->Add(new wxStaticText(frame_match_box, -1, _("Match Engine:")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	wxArrayString engine_choices;
+	engine_choices.Add(_("Auto (DBNet -> Classic; SubtitleOCR if available)"));
+	engine_choices.Add(_("SubtitleOCR External Engine (望言OCR)"));
+	engine_choices.Add(_("Native DBNet Neural Matcher (内置深度学习)"));
+	engine_choices.Add(_("Classic Native Pixel Matcher (经典原生像素/Dice)"));
+	auto engine_choice = new wxChoice(frame_match_box, -1, wxDefaultPosition, wxDefaultSize, engine_choices);
+	int cur_engine = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 3));
+	engine_choice->SetSelection(cur_engine);
+	engine_row->Add(engine_choice, 1, wxALIGN_CENTRE_VERTICAL);
+	frame_match_sizer->Add(engine_row, 0, wxEXPAND | wxALL, 6);
+
+	// Engine tip text
+	auto engine_tip = new wxStaticText(frame_match_box, -1, "");
+	engine_tip->SetForegroundColour(wxColour(110, 110, 110));
+	frame_match_sizer->Add(engine_tip, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 6);
+
+	auto update_engine_tip = [engine_choice, engine_tip]() {
+		int sel = engine_choice->GetSelection();
+		if (sel == 0) {
+			engine_tip->SetLabel(_("Auto: Prioritizes built-in DBNet neural detection; falls back to classic pixel matching. Uses SubtitleOCR if DLL is loaded."));
+		} else if (sel == 1) {
+			engine_tip->SetLabel(_("SubtitleOCR: Calls external subocr.dll C-ABI pipeline. Requires valid subocr.dll directory."));
+		} else if (sel == 2) {
+			engine_tip->SetLabel(_("Native DBNet: Uses embedded neural text confidence via DirectML GPU acceleration."));
+		} else {
+			engine_tip->SetLabel(_("Classic Native Pixel: Uses original dual-polarity mask and Dice similarity matching."));
+		}
+	};
+	update_engine_tip();
+	engine_choice->Bind(wxEVT_CHOICE, [update_engine_tip](wxCommandEvent&) { update_engine_tip(); });
+
+	// 2. SubtitleOCR Path
+	auto subocr_box_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, _("SubtitleOCR (望言OCR) Integration"));
+	auto subocr_box = subocr_box_sizer->GetStaticBox();
+
+	auto path_row = new wxBoxSizer(wxHORIZONTAL);
+	path_row->Add(new wxStaticText(subocr_box, -1, _("Directory Path:")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	auto subocr_path_ctrl = new wxTextCtrl(subocr_box, -1, to_wx(OPT_GET("Tool/Frame Match/SubtitleOCR Path")->GetString()));
+	path_row->Add(subocr_path_ctrl, 1, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 5);
+	auto browse_btn = new wxButton(subocr_box, -1, _("Browse..."), wxDefaultPosition, wxSize(75, -1));
+	path_row->Add(browse_btn, 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 5);
+	auto test_btn = new wxButton(subocr_box, -1, _("Test DLL"), wxDefaultPosition, wxSize(75, -1));
+	path_row->Add(test_btn, 0, wxALIGN_CENTRE_VERTICAL);
+	subocr_box_sizer->Add(path_row, 0, wxEXPAND | wxALL, 6);
+
+	auto status_text = new wxStaticText(subocr_box, -1, "");
+	subocr_box_sizer->Add(status_text, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 6);
+
+	auto update_status = [subocr_path_ctrl, status_text](bool probe = false) {
+		std::string path_u8 = from_wx(subocr_path_ctrl->GetValue());
+		if (path_u8.empty()) {
+			status_text->SetLabel(_("Status: No SubtitleOCR path configured (using built-in neural / pixel engine)."));
+			status_text->SetForegroundColour(wxColour(110, 110, 110));
+			return;
+		}
+		if (probe) {
+			SubocrEngine::Get().Load(path_u8);
+		}
+		if (SubocrEngine::Get().IsAvailable()) {
+			status_text->SetLabel(wxString::Format(_("Status: subocr.dll loaded and verified (%s)"), wxString(SubocrEngine::Get().GetLoadedPath())));
+			status_text->SetForegroundColour(wxColour(0, 130, 0));
+		} else {
+			status_text->SetLabel(_("Status: subocr.dll not found in this folder (please select directory containing dev-libs subocr.dll)."));
+			status_text->SetForegroundColour(wxColour(180, 50, 0));
+		}
+	};
+	update_status(false);
+
+	browse_btn->Bind(wxEVT_BUTTON, [&d, subocr_path_ctrl, update_status](wxCommandEvent&) {
+		wxDirDialog dlg(&d, _("Select SubtitleOCR (望言OCR) Directory"), subocr_path_ctrl->GetValue());
+		if (dlg.ShowModal() == wxID_OK) {
+			subocr_path_ctrl->SetValue(dlg.GetPath());
+			update_status(true);
+		}
+	});
+
+	test_btn->Bind(wxEVT_BUTTON, [update_status](wxCommandEvent&) {
+		update_status(true);
+	});
+
+	// 3. Similarity & Rerun step
+	auto sim_box_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, _("Matching Thresholds"));
+	auto sim_box = sim_box_sizer->GetStaticBox();
+	auto sim_row = new wxBoxSizer(wxHORIZONTAL);
+	sim_row->Add(new wxStaticText(sim_box, -1, _("Minimum region similarity (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	auto minimum_similarity = new wxSpinCtrl(sim_box, -1, wxEmptyString, wxDefaultPosition, wxSize(70, -1), wxSP_ARROW_KEYS, 50, 95, OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt());
+	sim_row->Add(minimum_similarity, 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 15);
+	sim_row->Add(new wxStaticText(sim_box, -1, _("Rerun similarity step (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	auto rerun_step = new wxSpinCtrl(sim_box, -1, wxEmptyString, wxDefaultPosition, wxSize(70, -1), wxSP_ARROW_KEYS, 5, 30, OPT_GET("Tool/Frame Match/Rerun Step")->GetInt());
+	sim_row->Add(rerun_step, 0, wxALIGN_CENTRE_VERTICAL);
+	sim_box_sizer->Add(sim_row, 0, wxEXPAND | wxALL, 6);
+
+	main_sizer->Add(frame_match_sizer, 0, wxALL | wxEXPAND, 8);
+	main_sizer->Add(subocr_box_sizer, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+	main_sizer->Add(sim_box_sizer, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 8);
+	main_sizer->Add(d.CreateSeparatedButtonSizer(wxOK | wxCANCEL), 0, wxALL | wxEXPAND, 8);
+
+	d.SetSizerAndFit(main_sizer);
+	d.CenterOnParent();
+
+	if (d.ShowModal() == wxID_OK) {
+		OPT_SET("Tool/Frame Match/Engine")->SetInt(engine_choice->GetSelection());
+		std::string new_path = from_wx(subocr_path_ctrl->GetValue());
+		OPT_SET("Tool/Frame Match/SubtitleOCR Path")->SetString(new_path);
+		OPT_SET("Tool/Frame Match/Minimum Similarity")->SetInt(minimum_similarity->GetValue());
+		OPT_SET("Tool/Frame Match/Rerun Step")->SetInt(rerun_step->GetValue());
+		if (!new_path.empty()) {
+			SubocrEngine::Get().Load(new_path);
+		}
 	}
 }

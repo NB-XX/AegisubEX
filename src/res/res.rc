@@ -16,6 +16,7 @@
 
 // main app icon should always be first
 // (windows explorer uses the first icon resource by default)
+1 ICON "../bitmaps/windows/icon.ico"
 wxicon ICON "../bitmaps/windows/icon.ico"
 eyedropper_cursor CURSOR "../bitmaps/windows/eyedropper.cur"
 
