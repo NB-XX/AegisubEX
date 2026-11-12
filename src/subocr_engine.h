@@ -78,6 +78,8 @@ public:
 
 	bool IsAvailable() const { return m_available; }
 	std::wstring GetLoadedPath() const { return m_loaded_path; }
+	std::wstring GetResourcePath() const { return m_resource_path; }
+	std::string GetStatusMessage() const { return m_status_message; }
 
 	// 动态检测与载入 subocr 动态库
 	bool Load(const std::wstring& custom_dir = L"");
@@ -116,6 +118,9 @@ private:
 
 	bool m_available = false;
 	std::wstring m_loaded_path;
+	std::wstring m_resource_path;
+	std::string m_safe_ascii_res_path;
+	std::string m_status_message;
 
 #ifdef _WIN32
 	HMODULE m_hLib = nullptr;

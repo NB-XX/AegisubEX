@@ -199,18 +199,32 @@ void ShowFrameMatchSettingsDialog(agi::Context *c) {
 	auto update_status = [subocr_path_ctrl, status_text](bool probe = false) {
 		std::string path_u8 = from_wx(subocr_path_ctrl->GetValue());
 		if (path_u8.empty()) {
-			status_text->SetLabel(to_wx("状态: 未配置望言OCR路径 (默认使用内建神经网络 / 像素引擎)"));
-			status_text->SetForegroundColour(wxColour(110, 110, 110));
+			if (probe) {
+				SubocrEngine::Get().Unload();
+				SubocrEngine::Get().Load();
+			}
+			if (SubocrEngine::Get().IsAvailable()) {
+				status_text->SetLabel(wxString::Format(to_wx("状态: 默认集成引擎就绪 (%s)"), wxString(SubocrEngine::Get().GetLoadedPath())));
+				status_text->SetForegroundColour(wxColour(0, 130, 0));
+			} else {
+				status_text->SetLabel(to_wx("状态: 未指定自定义路径 (使用内建神经网络 / 原生像素引擎)"));
+				status_text->SetForegroundColour(wxColour(110, 110, 110));
+			}
 			return;
 		}
 		if (probe) {
+			SubocrEngine::Get().Unload();
 			SubocrEngine::Get().Load(path_u8);
 		}
 		if (SubocrEngine::Get().IsAvailable()) {
-			status_text->SetLabel(wxString::Format(to_wx("状态: 已成功载入并验证 subocr.dll (%s)"), wxString(SubocrEngine::Get().GetLoadedPath())));
+			status_text->SetLabel(wxString::Format(to_wx("状态: %s (%s)"),
+				to_wx(SubocrEngine::Get().GetStatusMessage()),
+				wxString(SubocrEngine::Get().GetLoadedPath())));
 			status_text->SetForegroundColour(wxColour(0, 130, 0));
 		} else {
-			status_text->SetLabel(to_wx("状态: 该目录下未找到有效的 subocr.dll (请选择包含开发库的目录)"));
+			std::string msg = SubocrEngine::Get().GetStatusMessage();
+			if (msg.empty()) msg = "该目录下未找到有效的 subocr.dll 或缺少模型资源";
+			status_text->SetLabel(wxString::Format(to_wx("状态: %s"), to_wx(msg)));
 			status_text->SetForegroundColour(wxColour(180, 50, 0));
 		}
 	};
