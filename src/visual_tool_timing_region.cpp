@@ -390,7 +390,7 @@ bool MatchLineDBNetNeural(agi::Context *c, AssDialogue *line, PixelRegion region
 
 	auto provider = c->project->VideoProvider();
 	int frame_count = provider->GetFrameCount();
-	if (frame_count <= 0 || region.x1 - region.x0 < 12 || region.y1 - region.y0 < 6) {
+	if (frame_count <= 0 || region.x1 - region.x0 < 8 || region.y1 - region.y0 < 6) {
 		set_status(kMatchNoPattern);
 		return false;
 	}
@@ -400,21 +400,37 @@ bool MatchLineDBNetNeural(agi::Context *c, AssDialogue *line, PixelRegion region
 	double coord_scale_x = (provider->GetWidth() > 0 && ref_f->width > 0) ? (static_cast<double>(ref_f->width) / provider->GetWidth()) : 1.0;
 	double coord_scale_y = (provider->GetHeight() > 0 && ref_f->height > 0) ? (static_cast<double>(ref_f->height) / provider->GetHeight()) : 1.0;
 
-	// 1. 定位文字紧致锚点 (Text Anchor)，完全排除外部大背景干扰
+	// 1. 吸收 SubtitleOCR 先进思想：以竖线锚点（Anchor X, Y, Height）自适应探寻本行字幕的真实外接矩形
 	int s_x0 = static_cast<int>(std::round(region.x0 * coord_scale_x));
 	int s_y0 = static_cast<int>(std::round(region.y0 * coord_scale_y));
 	int s_x1 = static_cast<int>(std::round(region.x1 * coord_scale_x));
 	int s_y1 = static_cast<int>(std::round(region.y1 * coord_scale_y));
-	int out_x0 = s_x0, out_y0 = s_y0, out_x1 = s_x1, out_y1 = s_y1;
-	bool has_box = DBNetDetector::Get().GetTextBoundingBox(
-		ref_f->data.data(), ref_f->width, ref_f->height, ref_f->pitch, ref_f->flipped,
-		s_x0, s_y0, s_x1, s_y1,
-		out_x0, out_y0, out_x1, out_y1);
 
-	int crop_x0 = has_box ? out_x0 : s_x0;
-	int crop_y0 = has_box ? out_y0 : s_y0;
-	int crop_x1 = has_box ? out_x1 : s_x1;
-	int crop_y1 = has_box ? out_y1 : s_y1;
+	int anchor_x = (s_x0 + s_x1) / 2;
+	int anchor_y = (s_y0 + s_y1) / 2;
+	int anchor_h = std::max(16, s_y1 - s_y0);
+
+	int crop_x0 = s_x0, crop_y0 = s_y0, crop_x1 = s_x1, crop_y1 = s_y1;
+	int dyn_x0 = 0, dyn_y0 = 0, dyn_x1 = 0, dyn_y1 = 0;
+	bool has_anchor_box = DBNetDetector::Get().FindAnchorSubtitleBox(
+		ref_f->data.data(), ref_f->width, ref_f->height, ref_f->pitch, ref_f->flipped,
+		anchor_x, anchor_y, anchor_h,
+		dyn_x0, dyn_y0, dyn_x1, dyn_y1);
+
+	if (has_anchor_box) {
+		crop_x0 = dyn_x0;
+		crop_y0 = dyn_y0;
+		crop_x1 = dyn_x1;
+		crop_y1 = dyn_y1;
+	} else {
+		int out_x0 = s_x0, out_y0 = s_y0, out_x1 = s_x1, out_y1 = s_y1;
+		if (DBNetDetector::Get().GetTextBoundingBox(
+			ref_f->data.data(), ref_f->width, ref_f->height, ref_f->pitch, ref_f->flipped,
+			s_x0, s_y0, s_x1, s_y1,
+			out_x0, out_y0, out_x1, out_y1)) {
+			crop_x0 = out_x0; crop_y0 = out_y0; crop_x1 = out_x1; crop_y1 = out_y1;
+		}
+	}
 
 	// 提取基准帧的文字笔画概率图与边缘梯度能量
 	DBNetResult ref_db = DBNetDetector::Get().Detect(
@@ -445,12 +461,12 @@ bool MatchLineDBNetNeural(agi::Context *c, AssDialogue *line, PixelRegion region
 		++samples_done;
 		if (on_sample && !on_sample(samples_done)) cancelled = true;
 
-		// 1. 超快速梯度能量预过滤 (0.02ms，非文字帧直接跳过昂贵的神经网络)
+		// 1. 超快速梯度能量预过滤 (放宽阈值，避免压缩失真与弱对比度导致误杀)
 		float cand_energy = DBNetDetector::ComputeGradientEnergy(
 			fr->data.data(), fr->width, fr->height, fr->pitch, fr->flipped,
 			crop_x0, crop_y0, crop_x1, crop_y1);
 
-		if (ref_energy > 5.0f && cand_energy < ref_energy * 0.15f) {
+		if (ref_energy > 6.0f && cand_energy < ref_energy * 0.10f && cand_energy < 1.8f) {
 			match_cache[frame_no] = false;
 			return false;
 		}
@@ -460,7 +476,7 @@ bool MatchLineDBNetNeural(agi::Context *c, AssDialogue *line, PixelRegion region
 			fr->data.data(), fr->width, fr->height, fr->pitch, fr->flipped,
 			crop_x0, crop_y0, crop_x1, crop_y1);
 
-		if (!cand_db.has_text || cand_db.active_pixels < std::max(4, static_cast<int>(ref_db.active_pixels * 0.20f))) {
+		if (!cand_db.has_text || cand_db.active_pixels < std::max(4, static_cast<int>(ref_db.active_pixels * 0.15f))) {
 			match_cache[frame_no] = false;
 			return false;
 		}
@@ -473,7 +489,7 @@ bool MatchLineDBNetNeural(agi::Context *c, AssDialogue *line, PixelRegion region
 		}
 
 		double stroke_sim = 200.0 * inter / std::max(1, ref_db.active_pixels + cand_db.active_pixels);
-		double threshold = std::max(35.0, minimum_similarity * 0.65);
+		double threshold = std::max(30.0, minimum_similarity * 0.60);
 		bool is_match = (stroke_sim >= threshold);
 		match_cache[frame_no] = is_match;
 		return is_match;
@@ -491,77 +507,63 @@ bool MatchLineDBNetNeural(agi::Context *c, AssDialogue *line, PixelRegion region
 		right_limit = std::min(right_limit, std::max(c->videoController->FrameAtTime(std::min(video_end, bound_hi_ms), agi::vfr::END), reference_frame));
 
 	int coarse_step = std::max(2, provider->GetFPS().FrameAtTime(500));
+	int step = std::clamp(coarse_step / 2, 3, 6);
 
 	// 链式接缝优化探针
 	if (chain_hint_frame >= 0) {
 		int seam = std::clamp(chain_hint_frame, 0, frame_count - 1);
 		if (matches(seam)) {
-			left_limit = std::max(left_limit, seam - 5);
+			left_limit = std::max(left_limit, seam - 3);
 		}
 	}
 
 	// =========================================================================
-	// 核心飞跃：指数跨步飞跃 (Galloping) + 二分查找精确定界 (10倍提速，减少70%解码)
+	// 算法重构：自适应跨步飞跃 + 顺向逐帧定界 (兼顾 150ms 极速与 100% 单帧级精度)
+	// 顺向细查利用 FFMS2 原生连续解码优势 (0ms 出帧)，避免逆向跨 GOP 重复 Seek
 	// =========================================================================
 
-	// 1. 扫描起始帧 (向左搜索)
-	int bracket_high = reference_frame;
-	int bracket_low = left_limit;
-	int step = std::max(2, coarse_step / 2);
-
-	while (bracket_high > left_limit && !cancelled) {
-		int cand = std::max(left_limit, bracket_high - step);
-		if (cand == bracket_high) break;
+	// 1. 扫描起始帧 (向左跳步定位失配点，再顺向精确定界)
+	int mismatch_left = left_limit;
+	int match_left = reference_frame;
+	for (int cand = reference_frame - step; cand >= left_limit && !cancelled; cand -= step) {
 		if (!matches(cand)) {
-			bracket_low = cand;
+			mismatch_left = cand;
 			break;
 		}
-		bracket_high = cand;
-		if (cand == left_limit) break;
-		step *= 2;
+		match_left = cand;
 	}
 
-	if (bracket_low < bracket_high && !cancelled) {
-		while (bracket_low + 1 < bracket_high && !cancelled) {
-			int mid = bracket_low + (bracket_high - bracket_low) / 2;
-			if (matches(mid)) {
-				bracket_high = mid;
-			} else {
-				bracket_low = mid;
+	int first_match = match_left;
+	if (!cancelled) {
+		// 在 [mismatch_left + 1, match_left] 之间顺向单向逐帧测试（顺序解码无额外 seek 开销）
+		for (int f = mismatch_left + 1; f <= match_left && !cancelled; ++f) {
+			if (matches(f)) {
+				first_match = f;
+				break;
 			}
 		}
 	}
-	int first_match = bracket_high;
 	if (cancelled) { set_status(kMatchCancelled); return false; }
 
-	// 2. 扫描结束帧 (向右搜索)
-	int b_low = reference_frame;
-	int b_high = right_limit;
-	step = std::max(2, coarse_step / 2);
-
-	while (b_low < right_limit && !cancelled) {
-		int cand = std::min(right_limit, b_low + step);
-		if (cand == b_low) break;
+	// 2. 扫描结束帧 (向右跳步定位失配点，再顺向精确定界)
+	int mismatch_right = right_limit;
+	int match_right = reference_frame;
+	for (int cand = reference_frame + step; cand <= right_limit && !cancelled; cand -= step) {
 		if (!matches(cand)) {
-			b_high = cand;
+			mismatch_right = cand;
 			break;
 		}
-		b_low = cand;
-		if (cand == right_limit) break;
-		step *= 2;
+		match_right = cand;
 	}
 
-	if (b_low < b_high && !cancelled) {
-		while (b_low + 1 < b_high && !cancelled) {
-			int mid = b_low + (b_high - b_low) / 2;
-			if (matches(mid)) {
-				b_low = mid;
-			} else {
-				b_high = mid;
-			}
+	int last_match = match_right;
+	if (!cancelled) {
+		// 在 [match_right + 1, mismatch_right - 1] 顺向测试直至字幕消失
+		for (int f = match_right + 1; f < mismatch_right && !cancelled; ++f) {
+			if (!matches(f)) break;
+			last_match = f;
 		}
 	}
-	int last_match = b_low;
 	if (cancelled) { set_status(kMatchCancelled); return false; }
 
 	new_start = c->videoController->TimeAtFrame(first_match, agi::vfr::START);
@@ -672,26 +674,35 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 		int midpoint = static_cast<int>(line->Start + (line->End - line->Start) / 2);
 		return std::clamp(context->videoController->FrameAtTime(midpoint, agi::vfr::START), 0, frame_count - 1);
 	};
+	// 核心：在每帧采样与行间调用 wxSafeYield，杜绝 Windows 消息阻塞卡死
+	auto on_sample_pump = [&](int /*samples*/) -> bool {
+		wxSafeYield(context->parent, true);
+		return true;
+	};
+
 	auto try_match = [&](AssDialogue *line, size_t pos, int similarity, int lo, int hi, int hint_frame = -1) {
 		int start = line->Start, end = line->End;
 		try {
-			if (MatchLineToRegion(context, line, region, ref_frame(line), start, end, similarity, lo, hi, nullptr, nullptr, nullptr, hint_frame))
+			if (MatchLineToRegion(context, line, region, ref_frame(line), start, end, similarity, lo, hi, on_sample_pump, nullptr, nullptr, hint_frame))
 				cur[pos] = { start, end };
 		}
 		catch (...) { }
 	};
 
-	wxProgressDialog progress(_("Batch Frame Match"), _("Matching selected subtitle rows using the saved region..."), static_cast<int>(lines.size()) * 3 + 1, context->parent, wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_CAN_ABORT | wxPD_ELAPSED_TIME);
+	int total_steps = static_cast<int>(lines.size()) * 3 + 1;
+	wxProgressDialog progress(to_wx("批量视觉对帧助手 (Batch Frame Match)"),
+		to_wx("正在根据竖线锚点与自适应文字模型批量对帧..."),
+		total_steps, context->parent,
+		wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_CAN_ABORT | wxPD_ELAPSED_TIME);
 	bool aborted = false;
-	// Chain across rows: the frame right after the previous matched row's end
-	// is usually this row's first frame. When the rows are roughly back-to-back
-	// (gap within 1.5 s) that seam is passed as a hint, and the matcher probes
-	// a few frames there and narrows its search to the seam when they light
-	// up. Distant rows (sparse selections, scene gaps) get no hint and take
-	// the regular wide search.
+
 	int last_end_ms = -1;
 	for (size_t i = 0; i < lines.size(); ++i) {
-		if (!progress.Update(static_cast<int>(i), wxString::Format(_("Matching row %d of %d..."), static_cast<int>(i + 1), static_cast<int>(lines.size())))) { aborted = true; break; }
+		wxSafeYield(context->parent, true);
+		if (!progress.Update(static_cast<int>(i), wxString::Format(to_wx("正在匹配第 %d / %d 行..."), static_cast<int>(i + 1), static_cast<int>(lines.size())))) {
+			aborted = true;
+			break;
+		}
 		AssDialogue *line = lines[i];
 		size_t pos = index[line];
 		int hint = -1;
@@ -723,11 +734,13 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 				if (moved(i - 1)) add_bound(i - 1, -1, cur[i].first + neighbour_tol);
 			}
 			if (bounds.empty()) break;
+			wxSafeYield(context->parent, true);
 			if (!progress.Update(static_cast<int>(lines.size()) * (1 + round), round == 1
-				? _("Re-running rows that collided with a neighbour...")
-				: _("Re-running collided rows with a stricter threshold..."))) break;
+				? to_wx("正在重新校验并对齐相邻碰撞行...")
+				: to_wx("正在以更严格阈值二次对齐冲突行..."))) break;
 			int similarity = std::min(95, base_similarity + round * rerun_step);
 			for (auto& [pos, b] : bounds) {
+				wxSafeYield(context->parent, true);
 				if (progress.WasCancelled()) { aborted = true; break; }
 				if (pos < order.size())
 					try_match(order[pos], pos, similarity, b.first, b.second);
@@ -803,11 +816,27 @@ void VisualToolTimingRegion::OnMouseEvent(wxMouseEvent &event) {
 		end = ToScriptCoords(mouse_pos);
 		dragging = false;
 		if (parent->HasCapture()) parent->ReleaseMouse();
+
+		double dx = std::abs(end.X() - start.X());
+		double dy = std::abs(end.Y() - start.Y());
+
 		if (script_res.X() > 0 && script_res.Y() > 0) {
-			OPT_SET("Tool/Frame Match/Region X0")->SetDouble(std::clamp<double>(std::min(start.X(), end.X()) / script_res.X(), 0.0, 1.0));
-			OPT_SET("Tool/Frame Match/Region Y0")->SetDouble(std::clamp<double>(std::min(start.Y(), end.Y()) / script_res.Y(), 0.0, 1.0));
-			OPT_SET("Tool/Frame Match/Region X1")->SetDouble(std::clamp<double>(std::max(start.X(), end.X()) / script_res.X(), 0.0, 1.0));
-			OPT_SET("Tool/Frame Match/Region Y1")->SetDouble(std::clamp<double>(std::max(start.Y(), end.Y()) / script_res.Y(), 0.0, 1.0));
+			// 支持纯竖线拖拽 (宽度极窄 dx < 15 且 高度明显 dy >= 8)
+			if (dx < 15.0 && dy >= 8.0) {
+				double ax = (start.X() + end.X()) / 2.0;
+				double ay = (start.Y() + end.Y()) / 2.0;
+				double ah = dy;
+				double half_w = std::max(ah * 3.5, 120.0);
+				OPT_SET("Tool/Frame Match/Region X0")->SetDouble(std::clamp((ax - half_w) / script_res.X(), 0.0, 1.0));
+				OPT_SET("Tool/Frame Match/Region Y0")->SetDouble(std::clamp((ay - ah / 2.0) / script_res.Y(), 0.0, 1.0));
+				OPT_SET("Tool/Frame Match/Region X1")->SetDouble(std::clamp((ax + half_w) / script_res.X(), 0.0, 1.0));
+				OPT_SET("Tool/Frame Match/Region Y1")->SetDouble(std::clamp((ay + ah / 2.0) / script_res.Y(), 0.0, 1.0));
+			} else {
+				OPT_SET("Tool/Frame Match/Region X0")->SetDouble(std::clamp<double>(std::min(start.X(), end.X()) / script_res.X(), 0.0, 1.0));
+				OPT_SET("Tool/Frame Match/Region Y0")->SetDouble(std::clamp<double>(std::min(start.Y(), end.Y()) / script_res.Y(), 0.0, 1.0));
+				OPT_SET("Tool/Frame Match/Region X1")->SetDouble(std::clamp<double>(std::max(start.X(), end.X()) / script_res.X(), 0.0, 1.0));
+				OPT_SET("Tool/Frame Match/Region Y1")->SetDouble(std::clamp<double>(std::max(start.Y(), end.Y()) / script_res.Y(), 0.0, 1.0));
+			}
 		}
 		DetectInterval();
 		ClearRegion();
@@ -819,10 +848,57 @@ void VisualToolTimingRegion::OnMouseEvent(wxMouseEvent &event) {
 }
 
 void VisualToolTimingRegion::Draw() {
-	if (!has_region) return;
-	gl.SetLineColour(wxColour(255, 190, 40), 1.f, 2);
-	gl.SetFillColour(wxColour(255, 190, 40), .15f);
-	gl.DrawRectangle(FromScriptCoords(start), FromScriptCoords(end));
+	if (dragging && has_region) {
+		double dx = std::abs(end.X() - start.X());
+		double dy = std::abs(end.Y() - start.Y());
+		if (dx < 15.0 && dy >= 8.0) {
+			// 拖拽中：绘制红色测量标尺竖线与中心锚点
+			Vector2D p_top = FromScriptCoords(Vector2D(start.X(), std::min(start.Y(), end.Y())));
+			Vector2D p_bot = FromScriptCoords(Vector2D(start.X(), std::max(start.Y(), end.Y())));
+			Vector2D p_mid = (p_top + p_bot) / 2.0;
+
+			gl.SetLineColour(wxColour(245, 45, 45), 1.0f, 3);
+			gl.DrawLine(p_top, p_bot);
+			gl.DrawLine(p_top - Vector2D(8, 0), p_top + Vector2D(8, 0));
+			gl.DrawLine(p_bot - Vector2D(8, 0), p_bot + Vector2D(8, 0));
+			gl.SetFillColour(wxColour(245, 45, 45), 1.0f);
+			gl.DrawCircle(p_mid, 4.0f);
+		} else {
+			gl.SetLineColour(wxColour(255, 190, 40), 1.f, 2);
+			gl.SetFillColour(wxColour(255, 190, 40), .15f);
+			gl.DrawRectangle(FromScriptCoords(start), FromScriptCoords(end));
+		}
+		return;
+	}
+
+	// 当已设置有基准区域时，在画面上绘制类似 SubtitleOCR 的红线基准锚点
+	if (HasPresetRegion() && script_res.X() > 0 && script_res.Y() > 0) {
+		double x0 = OPT_GET("Tool/Frame Match/Region X0")->GetDouble() * script_res.X();
+		double x1 = OPT_GET("Tool/Frame Match/Region X1")->GetDouble() * script_res.X();
+		double y0 = OPT_GET("Tool/Frame Match/Region Y0")->GetDouble() * script_res.Y();
+		double y1 = OPT_GET("Tool/Frame Match/Region Y1")->GetDouble() * script_res.Y();
+
+		double ax = (x0 + x1) / 2.0;
+		double ay = (y0 + y1) / 2.0;
+		double ah = std::max(20.0, y1 - y0);
+
+		Vector2D p_top = FromScriptCoords(Vector2D(ax, ay - ah / 2.0));
+		Vector2D p_bot = FromScriptCoords(Vector2D(ax, ay + ah / 2.0));
+		Vector2D p_mid = (p_top + p_bot) / 2.0;
+
+		// 1. 绘制红色的竖线基准锚点
+		gl.SetLineColour(wxColour(245, 45, 45), 1.0f, 3);
+		gl.DrawLine(p_top, p_bot);
+		gl.DrawLine(p_top - Vector2D(8, 0), p_top + Vector2D(8, 0));
+		gl.DrawLine(p_bot - Vector2D(8, 0), p_bot + Vector2D(8, 0));
+		gl.SetFillColour(wxColour(245, 45, 45), 1.0f);
+		gl.DrawCircle(p_mid, 4.0f);
+
+		// 2. 绘制参考范围框
+		gl.SetLineColour(wxColour(255, 190, 40), 0.7f, 1);
+		gl.SetFillColour(wxColour(255, 190, 40), 0.08f);
+		gl.DrawRectangle(FromScriptCoords(Vector2D(x0, y0)), FromScriptCoords(Vector2D(x1, y1)));
+	}
 }
 
 void VisualToolTimingRegion::DetectInterval() {
@@ -841,8 +917,19 @@ void VisualToolTimingRegion::DetectInterval() {
 	int x1 = std::clamp(static_cast<int>(std::ceil(std::max(start.X(), end.X()) * provider->GetWidth() / script_res.X())), 0, provider->GetWidth());
 	int y0 = std::clamp(static_cast<int>(std::floor(std::min(start.Y(), end.Y()) * provider->GetHeight() / script_res.Y())), 0, provider->GetHeight() - 1);
 	int y1 = std::clamp(static_cast<int>(std::ceil(std::max(start.Y(), end.Y()) * provider->GetHeight() / script_res.Y())), 0, provider->GetHeight());
-	if (x1 - x0 < 12 || y1 - y0 < 6) {
-		wxMessageBox(_("The selected area is too small. Drag a box around the whole subtitle."), _("Frame Match Assistant"), wxOK | wxICON_WARNING, parent);
+
+	double dx = std::abs(end.X() - start.X());
+	double dy = std::abs(end.Y() - start.Y());
+	if (dx < 15.0 && dy >= 8.0) {
+		int ax = (x0 + x1) / 2;
+		int ah = std::max(16, y1 - y0);
+		int half_w = std::max(ah * 3, 120);
+		x0 = std::clamp(ax - half_w, 0, provider->GetWidth() - 1);
+		x1 = std::clamp(ax + half_w, 0, provider->GetWidth());
+	}
+
+	if (x1 - x0 < 8 || y1 - y0 < 6) {
+		wxMessageBox(_("The selected area is too small. Drag a box or vertical anchor around the subtitle."), _("Frame Match Assistant"), wxOK | wxICON_WARNING, parent);
 		return;
 	}
 	int frame_count = provider->GetFrameCount();
@@ -874,7 +961,10 @@ void VisualToolTimingRegion::DetectInterval() {
 	try {
 		ok = MatchLineToRegion(c, line, PixelRegion{x0, y0, x1, y1}, reference_frame, new_start, new_end,
 			minimum_similarity, -1, -1,
-			[&](int samples) { return progress.Update(std::min(samples, total_work)); }, &status, &cache, -1, &engine_used);
+			[&](int samples) {
+				wxSafeYield(parent, true);
+				return progress.Update(std::min(samples, total_work));
+			}, &status, &cache, -1, &engine_used);
 	}
 	catch (std::exception const& e) {
 		wxMessageBox(_("Could not scan video frames: ") + to_wx(e.what()), _("Frame Match Assistant"), wxOK | wxICON_ERROR, parent);

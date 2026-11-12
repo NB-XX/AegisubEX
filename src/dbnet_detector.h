@@ -432,4 +432,185 @@ public:
 		if (output_tensor_val) ort->ReleaseValue(output_tensor_val);
 		return found;
 	}
+
+	// 核心：基于竖线锚点（Anchor X, Y, Height）自适应定位并捕获当前帧整行字幕的精确外接矩形
+	// 吸收 SubtitleOCR 先进思想：无论字数长短，自动捕获穿过竖线锚点的完整字幕，彻底解决固定死方框在长短字幕上的失真
+	bool FindAnchorSubtitleBox(const uint8_t* frame_data, int frame_w, int frame_h, int frame_pitch, bool flipped,
+	                           int anchor_x, int anchor_y, int anchor_h,
+	                           int& out_x0, int& out_y0, int& out_x1, int& out_y1) {
+		if (!available || !ort || !session) return false;
+		if (frame_w <= 0 || frame_h <= 0 || anchor_h < 8) return false;
+
+		anchor_x = std::clamp(anchor_x, 0, frame_w - 1);
+		anchor_y = std::clamp(anchor_y, 0, frame_h - 1);
+
+		// 1. 在锚点 Y 上下截取水平条带（高度大约为 1.5 ~ 1.8 倍字高）
+		int half_h = std::max(12, anchor_h * 4 / 5);
+		int strip_y0 = std::clamp(anchor_y - half_h, 0, frame_h - 1);
+		int strip_y1 = std::clamp(anchor_y + half_h, 0, frame_h);
+		int strip_h = strip_y1 - strip_y0;
+		if (strip_h < 12) return false;
+
+		// 2. 水平范围以锚点 X 为中心展开，覆盖整行字幕可能的跨度（最大支持 1440 像素宽带）
+		int half_w = std::min(frame_w / 2, std::max(anchor_h * 10, 480));
+		int strip_x0 = std::clamp(anchor_x - half_w, 0, frame_w - 1);
+		int strip_x1 = std::clamp(anchor_x + half_w, 0, frame_w);
+		int strip_w = strip_x1 - strip_x0;
+		if (strip_w < 24) return false;
+
+		// 3. 规整推断尺寸为 32 的整数倍
+		int target_h = 64;
+		int target_w = std::clamp(((strip_w * target_h / strip_h) + 31) / 32 * 32, 64, 768);
+		size_t n_pixels = static_cast<size_t>(target_h) * target_w;
+
+		if (input_tensor_cache.size() < 3 * n_pixels) {
+			input_tensor_cache.resize(3 * n_pixels);
+		}
+
+		constexpr float kr = 1.0f / (255.0f * 0.229f);
+		constexpr float kg = 1.0f / (255.0f * 0.224f);
+		constexpr float kb = 1.0f / (255.0f * 0.225f);
+		constexpr float br = -0.485f / 0.229f;
+		constexpr float bg = -0.456f / 0.224f;
+		constexpr float bb = -0.406f / 0.225f;
+
+		float* r_plane = input_tensor_cache.data();
+		float* g_plane = input_tensor_cache.data() + n_pixels;
+		float* b_plane = input_tensor_cache.data() + 2 * n_pixels;
+
+		for (int ty = 0; ty < target_h; ++ty) {
+			int sy = strip_y0 + (ty * strip_h) / target_h;
+			int row = flipped ? frame_h - 1 - sy : sy;
+			if (row < 0 || row >= frame_h) continue;
+
+			const uint8_t* row_ptr = frame_data + row * frame_pitch;
+			for (int tx = 0; tx < target_w; ++tx) {
+				int sx = strip_x0 + (tx * strip_w) / target_w;
+				if (sx < 0 || sx >= frame_w) continue;
+
+				const uint8_t* p = row_ptr + sx * 4;
+				int idx = ty * target_w + tx;
+				r_plane[idx] = p[2] * kr + br;
+				g_plane[idx] = p[1] * kg + bg;
+				b_plane[idx] = p[0] * kb + bb;
+			}
+		}
+
+		int64_t input_shape[4] = {1, 3, target_h, target_w};
+		OrtValue* input_tensor_val = nullptr;
+		OrtStatus* st = ort->CreateTensorWithDataAsOrtValue(
+			memory_info, input_tensor_cache.data(), 3 * n_pixels * sizeof(float),
+			input_shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &input_tensor_val);
+		if (st) { ort->ReleaseStatus(st); return false; }
+
+		const char* input_names[] = {"x"};
+		const char* output_names[] = {"sigmoid_0.tmp_0"};
+		OrtValue* output_tensor_val = nullptr;
+
+		st = ort->Run(session, nullptr, input_names, (const OrtValue* const*)&input_tensor_val, 1,
+		              output_names, 1, &output_tensor_val);
+		ort->ReleaseValue(input_tensor_val);
+
+		if (st) {
+			ort->ReleaseStatus(st);
+			return false;
+		}
+
+		float* out_data = nullptr;
+		st = ort->GetTensorMutableData(output_tensor_val, (void**)&out_data);
+		bool found = false;
+		if (!st && out_data) {
+			// 4. 将竖线锚点 X 映射到目标概率图横坐标
+			int target_ax = std::clamp((anchor_x - strip_x0) * target_w / strip_w, 0, target_w - 1);
+
+			// 统计各列是否存在有效笔画 (p >= 0.35f 且该列至少有两个笔画点)
+			std::vector<int> col_hits(target_w, 0);
+			for (int ty = 0; ty < target_h; ++ty) {
+				for (int tx = 0; tx < target_w; ++tx) {
+					if (out_data[ty * target_w + tx] >= 0.35f) {
+						col_hits[tx]++;
+					}
+				}
+			}
+
+			// 在 target_ax 附近寻找最近的活跃文字列（容忍锚点落在两字之间或词间空格）
+			int seed_tx = -1;
+			int best_dist = 999999;
+			int search_radius = std::max(12, target_h / 2);
+			for (int tx = std::max(0, target_ax - search_radius); tx <= std::min(target_w - 1, target_ax + search_radius); ++tx) {
+				if (col_hits[tx] >= 2) {
+					int d = std::abs(tx - target_ax);
+					if (d < best_dist) {
+						best_dist = d;
+						seed_tx = tx;
+					}
+				}
+			}
+
+			if (seed_tx >= 0) {
+				// 词间空格允许的最大连通跳隙（韩语/英语/中文词间距通常为字高的 1/4 ~ 1/3）
+				int max_gap = std::max(5, target_h / 4);
+
+				// 向左膨胀连通
+				int min_tx = seed_tx;
+				int gap = 0;
+				for (int tx = seed_tx - 1; tx >= 0; --tx) {
+					if (col_hits[tx] >= 2) {
+						min_tx = tx;
+						gap = 0;
+					} else {
+						if (++gap > max_gap) break;
+					}
+				}
+
+				// 向右膨胀连通
+				int max_tx = seed_tx;
+				gap = 0;
+				for (int tx = seed_tx + 1; tx < target_w; ++tx) {
+					if (col_hits[tx] >= 2) {
+						max_tx = tx;
+						gap = 0;
+					} else {
+						if (++gap > max_gap) break;
+					}
+				}
+
+				// 在 [min_tx, max_tx] 范围内统计垂直边界
+				int min_ty = target_h, max_ty = -1;
+				int total_active = 0;
+				for (int tx = min_tx; tx <= max_tx; ++tx) {
+					for (int ty = 0; ty < target_h; ++ty) {
+						if (out_data[ty * target_w + tx] >= 0.35f) {
+							++total_active;
+							if (ty < min_ty) min_ty = ty;
+							if (ty > max_ty) max_ty = ty;
+						}
+					}
+				}
+
+				if (total_active >= 12 && max_ty >= min_ty) {
+					int raw_x0 = strip_x0 + (min_tx * strip_w) / target_w;
+					int raw_x1 = strip_x0 + (max_tx * strip_w) / target_w;
+					int raw_y0 = strip_y0 + (min_ty * strip_h) / target_h;
+					int raw_y1 = strip_y0 + (max_ty * strip_h) / target_h;
+
+					int pad_x = std::clamp(strip_w / 60, 4, 12);
+					int pad_y = std::clamp(strip_h / 30, 2, 6);
+					out_x0 = std::clamp(raw_x0 - pad_x, 0, frame_w);
+					out_x1 = std::clamp(raw_x1 + pad_x, 0, frame_w);
+					out_y0 = std::clamp(raw_y0 - pad_y, 0, frame_h);
+					out_y1 = std::clamp(raw_y1 + pad_y, 0, frame_h);
+
+					if (out_x1 - out_x0 >= 16 && out_y1 - out_y0 >= 8) {
+						found = true;
+					}
+				}
+			}
+		} else if (st) {
+			ort->ReleaseStatus(st);
+		}
+
+		if (output_tensor_val) ort->ReleaseValue(output_tensor_val);
+		return found;
+	}
 };
