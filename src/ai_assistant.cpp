@@ -2386,7 +2386,7 @@ private:
 
 public:
 	VADDiarizeDialog(wxWindow* parent, agi::Context* c)
-	: wxDialog(parent, wxID_ANY, to_wx("智能人声切分与说话人识别 (AI VAD & Diarization)"),
+	: wxDialog(parent, wxID_ANY, to_wx("智能人声切分与说话人识别"),
 		wxDefaultPosition, wxSize(660, 740),
 		wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 	, c_(c)

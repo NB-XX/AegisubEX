@@ -263,11 +263,11 @@ void Video(wxTreebook *book, Preferences *parent) {
 	wxArrayString choice_misycbcr(3, cmisycbcr_arr);
 	p->OptionChoice(ycbcr, _("Match video's YCbCr Matrix on open"), choice_misycbcr, "Video/YCbCr Matrix Mismatch");
 
-	auto framematch = p->PageSizer(to_wx("视觉对帧助手 (Frame Match)"));
+	auto framematch = p->PageSizer(to_wx("视觉对帧"));
 	const wxString cengine_arr[] = {
-		to_wx("智能双模 (推荐: DBNet笔画检测，自动降级像素)"),
-		to_wx("深度学习笔画检测 (DBNet 神经网络，抗复杂背景)"),
-		to_wx("经典原生双极性像素模式 (Dice掩模快速对比)")
+		to_wx("智能双模（推荐：笔画检测，自动回退像素）"),
+		to_wx("深度学习笔画检测（神经网络，抗复杂背景）"),
+		to_wx("经典原生像素模式（快速对比）")
 	};
 	wxArrayString choice_engine(3, cengine_arr);
 	p->OptionChoice(framematch, to_wx("对帧匹配引擎"), choice_engine, "Tool/Frame Match/Engine");

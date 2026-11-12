@@ -244,7 +244,7 @@ private:
 
 public:
 	DialogVideoShuffler(wxWindow* parent, agi::Context* c)
-	: wxDialog(parent, wxID_ANY, to_wx("按字幕切分/合并视频 (Video Shuffler & Cutter)"), wxDefaultPosition, wxSize(780, 750),
+	: wxDialog(parent, wxID_ANY, to_wx("按字幕切分与合并视频"), wxDefaultPosition, wxSize(780, 750),
 	           wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 	, c_(c)
 	, alive_(std::make_shared<std::atomic<bool>>(true))

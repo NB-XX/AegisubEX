@@ -35,6 +35,7 @@
 #include <string>
 #include <vector>
 #include <wx/brush.h>
+#include <wx/panel.h>
 #include <wx/scrolbar.h>
 #include <wx/window.h>
 
@@ -66,6 +67,10 @@ class BaseGrid final : public wxWindow {
 	int playback_row = -1;
 	bool review_mode = false;
 	bool overlap_highlight = false;
+
+	bool filter_active = false;
+	int filter_field = 0; // 0: 全部, 1: 文本, 2: 说话人, 3: 样式
+	wxString filter_query;
 
 	std::unique_ptr<WidthHelper> width_helper;
 
@@ -129,7 +134,6 @@ class BaseGrid final : public wxWindow {
 
 	void SelectRow(int row, bool addToSelected = false, bool select=true);
 
-	int GetRows() const { return index_line_map.size(); }
 	void MakeRowVisible(int row);
 
 	/// @brief Get dialogue by index
@@ -141,10 +145,45 @@ public:
 	BaseGrid(wxWindow* parent, agi::Context *context);
 	~BaseGrid();
 
+	int GetRows() const { return static_cast<int>(index_line_map.size()); }
 	void SetByFrame(bool state);
 	void ScrollTo(int y);
 	void SetOverlapHighlight(bool enabled);
 	bool IsOverlapHighlightEnabled() const { return overlap_highlight; }
 
+	void SetFilter(int field, const wxString& query);
+	void ClearFilter();
+	bool HasActiveFilter() const { return review_mode && filter_active && !filter_query.empty(); }
+	int GetTotalEventsCount() const;
+
+	agi::signal::Signal<int, int> FilterCountsChanged;
+
 	DECLARE_EVENT_TABLE()
+};
+
+class wxChoice;
+class wxTextCtrl;
+class wxStaticText;
+class wxButton;
+
+class ReviewFilterBar final : public wxPanel {
+	agi::Context *context;
+	BaseGrid *grid;
+	wxStaticText *label = nullptr;
+	wxChoice *field_choice = nullptr;
+	wxTextCtrl *query_ctrl = nullptr;
+	wxStaticText *count_label = nullptr;
+	wxButton *clear_btn = nullptr;
+	agi::signal::Connection filter_conn;
+	agi::signal::Connection review_conn;
+
+	void UpdateCountLabel(int displayed, int total);
+	void OnQueryUpdated();
+
+public:
+	ReviewFilterBar(wxWindow *parent, agi::Context *context, BaseGrid *grid);
+	~ReviewFilterBar() override;
+
+	void OnReviewModeChanged(bool active);
+	void Clear();
 };

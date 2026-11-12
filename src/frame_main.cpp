@@ -213,6 +213,10 @@ void FrameMain::InitContents() {
 	StartupLog("Create subtitles grid");
 	context->subsGrid = new BaseGrid(Panel, context.get());
 
+	StartupLog("Create review filter bar");
+	reviewFilterBar = new ReviewFilterBar(Panel, context.get(), context->subsGrid);
+	reviewFilterBar->Show(false);
+
 	StartupLog("Create video box");
 	videoBox = new VideoBox(Panel, false, context.get());
 
@@ -234,8 +238,12 @@ void FrameMain::InitContents() {
 	TopSizer = new wxBoxSizer(wxHORIZONTAL);
 	TopSizer->Add(videoBox, 0, wxEXPAND, 0);
 	TopSizer->Add(ToolsSizer, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 5);
+	auto GridSizer = new wxBoxSizer(wxVERTICAL);
+	GridSizer->Add(reviewFilterBar, 0, wxEXPAND | wxBOTTOM, 2);
+	GridSizer->Add(context->subsGrid, 1, wxEXPAND, 0);
+
 	BottomSizer = new wxBoxSizer(wxHORIZONTAL);
-	BottomSizer->Add(context->subsGrid, 1, wxEXPAND, 0);
+	BottomSizer->Add(GridSizer, 1, wxEXPAND, 0);
 	BottomSizer->Add(aiPanel, 1, wxEXPAND | wxLEFT, 4);
 	MainSizer = new wxBoxSizer(wxVERTICAL);
 	MainSizer->Add(new wxStaticLine(Panel),0,wxEXPAND,0);

@@ -705,7 +705,7 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 	};
 
 	int total_steps = static_cast<int>(lines.size()) * 3 + 1;
-	wxProgressDialog progress(to_wx("批量视觉对帧助手 (Batch Frame Match)"),
+	wxProgressDialog progress(to_wx("批量视觉对帧"),
 		to_wx("正在根据竖线锚点与自适应文字模型批量对帧..."),
 		total_steps, context->parent,
 		wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_CAN_ABORT | wxPD_ELAPSED_TIME);
@@ -798,9 +798,9 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 		if (context->frame) {
 			int engine_mode = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 2));
 			wxString mode_label;
-			if (engine_mode == 0) mode_label = to_wx("智能双模 (DBNet笔画/像素)");
-			else if (engine_mode == 1) mode_label = to_wx("深度学习笔画检测 (DBNet)");
-			else mode_label = to_wx("经典原生双极性像素 (Dice)");
+			if (engine_mode == 0) mode_label = to_wx("智能双模");
+			else if (engine_mode == 1) mode_label = to_wx("深度学习笔画检测");
+			else mode_label = to_wx("经典原生像素");
 
 			context->frame->SetStatusText(wxString::Format(
 				to_wx("批量对帧完成：已实时更新 %d 行时间轴 [模式: %s]"),
@@ -969,13 +969,13 @@ void VisualToolTimingRegion::DetectInterval() {
 
 	int engine_mode = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 2));
 	wxString mode_label;
-	if (engine_mode == 0) mode_label = to_wx("智能双模 (DBNet笔画/像素)");
-	else if (engine_mode == 1) mode_label = to_wx("深度学习笔画检测 (DBNet)");
-	else mode_label = to_wx("经典原生双极性像素 (Dice)");
+	if (engine_mode == 0) mode_label = to_wx("智能双模");
+	else if (engine_mode == 1) mode_label = to_wx("深度学习笔画检测");
+	else mode_label = to_wx("经典原生像素");
 
 	int total_work = 30;
 	wxProgressDialog progress(
-		wxString::Format(to_wx("对帧助手 [%s]"), mode_label),
+		wxString::Format(to_wx("视觉对帧 [%s]"), mode_label),
 		wxString::Format(to_wx("正在使用 %s 扫描匹配字幕区间..."), mode_label),
 		total_work, parent, wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_CAN_ABORT | wxPD_ELAPSED_TIME);
 
@@ -1014,8 +1014,8 @@ void VisualToolTimingRegion::DetectInterval() {
 	c->videoController->JumpToTime(line->Start);
 
 	wxString used_desc;
-	if (engine_used == 1) used_desc = to_wx("内建DBNet文字笔画检测 (DirectML GPU加速)");
-	else used_desc = to_wx("经典原生双极性像素 (Dice)");
+	if (engine_used == 1) used_desc = to_wx("文字笔画检测（GPU硬件加速）");
+	else used_desc = to_wx("经典原生像素匹配");
 
 	if (c->frame) {
 		c->frame->SetStatusText(wxString::Format(

@@ -131,7 +131,7 @@ private:
 
 public:
 	DialogMotionTracker(wxWindow* parent, agi::Context* c)
-	: wxDialog(parent, wxID_ANY, to_wx("视频运动追踪与相对位移 (Motion Tracking)"),
+	: wxDialog(parent, wxID_ANY, to_wx("视频运动追踪与相对位移"),
 		wxDefaultPosition, wxSize(620, 680),
 		wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 	, c_(c)

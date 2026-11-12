@@ -122,9 +122,9 @@ namespace {
 	struct visual_mode_timing_region final : public visual_tool_command<VisualToolTimingRegion> {
 		CMD_NAME("video/tool/frame_match")
 		CMD_ICON(frame_match)
-		STR_MENU("Frame Match Assistant")
-		STR_DISP("Frame Match")
-		STR_HELP("Pick a tight box around the full source subtitle on a frame where it is visible")
+		wxString StrMenu(const agi::Context *) const override { return to_wx("视觉对帧助手"); }
+		wxString StrDisplay(const agi::Context *) const override { return to_wx("视觉对帧"); }
+		wxString StrHelp() const override { return to_wx("在视频画面上框选字幕区域进行单行对帧匹配"); }
 
 		void operator()(agi::Context *c) override {
 			if (c->videoDisplay->ToolIsType(typeid(VisualToolTimingRegion)))
@@ -138,9 +138,9 @@ namespace {
 		CMD_NAME("video/tool/frame_match_batch")
 		CMD_ICON(frame_match)
 		CMD_TYPE(COMMAND_VALIDATE)
-		STR_MENU("Batch Frame Match")
-		STR_DISP("Batch Frame Match")
-		STR_HELP("Match selected subtitle rows using the last picked subtitle region")
+		wxString StrMenu(const agi::Context *) const override { return to_wx("批量视觉对帧"); }
+		wxString StrDisplay(const agi::Context *) const override { return to_wx("批量对帧"); }
+		wxString StrHelp() const override { return to_wx("根据当前框选的字幕区域对所有选中行进行批量对帧匹配"); }
 
 		bool Validate(const agi::Context *c) override {
 			return c->project->VideoProvider() && !c->selectionController->GetSelectedSet().empty();

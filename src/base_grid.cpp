@@ -53,10 +53,15 @@
 #include <map>
 #include <set>
 
+#include <wx/button.h>
+#include <wx/choice.h>
 #include <wx/dcbuffer.h>
 #include <wx/menu.h>
 #include <wx/scrolbar.h>
+#include <wx/settings.h>
 #include <wx/sizer.h>
+#include <wx/stattext.h>
+#include <wx/textctrl.h>
 
 namespace {
 	std::set<std::string> s_expanded_groups;
@@ -154,8 +159,10 @@ void BaseGrid::OnDPIChanged(wxDPIChangedEvent &e) {
 void BaseGrid::OnSubtitlesCommit(int type) {
 	if (type == AssFile::COMMIT_NEW) {
 		s_expanded_groups.clear();
+		filter_active = false;
+		filter_query.clear();
 	}
-	if (type == AssFile::COMMIT_NEW || type & AssFile::COMMIT_ORDER || type & AssFile::COMMIT_DIAG_ADDREM)
+	if (type == AssFile::COMMIT_NEW || type & AssFile::COMMIT_ORDER || type & AssFile::COMMIT_DIAG_ADDREM || (filter_active && (type & (AssFile::COMMIT_DIAG_TEXT | AssFile::COMMIT_DIAG_META))))
 		UpdateMaps();
 	else if (type & AssFile::COMMIT_DIAG_TIME)
 		UpdateOverlapRows();
@@ -237,6 +244,12 @@ void BaseGrid::UpdateMaps() {
 	int current_group_row = -1;
 	std::string current_folded_gid;
 
+	wxString query_lower;
+	bool apply_filter = (review_mode && filter_active && !filter_query.empty());
+	if (apply_filter) {
+		query_lower = filter_query.Lower();
+	}
+
 	for (auto& curdiag : context->ass->Events) {
 		std::string const& eff = curdiag.Effect.get();
 		if (eff.rfind("motion-group:", 0) == 0) {
@@ -273,6 +286,34 @@ void BaseGrid::UpdateMaps() {
 			}
 		}
 
+		if (apply_filter) {
+			bool match = false;
+			wxString text_stripped = to_wx(curdiag.GetStrippedText()).Lower();
+			wxString text_raw = to_wx(curdiag.Text.get()).Lower();
+			wxString actor = to_wx(curdiag.Actor.get()).Lower();
+			wxString style = to_wx(curdiag.Style.get()).Lower();
+
+			if (filter_field == 1) { // 文本
+				match = (text_stripped.Find(query_lower) != wxNOT_FOUND || text_raw.Find(query_lower) != wxNOT_FOUND);
+			} else if (filter_field == 2) { // 说话人
+				match = (actor.Find(query_lower) != wxNOT_FOUND);
+			} else if (filter_field == 3) { // 样式
+				match = (style.Find(query_lower) != wxNOT_FOUND);
+			} else { // 全部字段
+				match = (text_stripped.Find(query_lower) != wxNOT_FOUND ||
+				         text_raw.Find(query_lower) != wxNOT_FOUND ||
+				         actor.Find(query_lower) != wxNOT_FOUND ||
+				         style.Find(query_lower) != wxNOT_FOUND);
+			}
+
+			if (!match) {
+				s_line_to_grid_row[&curdiag] = -1;
+				current_folded_gid.clear();
+				current_group_row = -1;
+				continue;
+			}
+		}
+
 		int row_idx = static_cast<int>(index_line_map.size());
 		index_line_map.push_back(&curdiag);
 		s_line_to_grid_row[&curdiag] = row_idx;
@@ -284,6 +325,17 @@ void BaseGrid::UpdateMaps() {
 	SetColumnWidths();
 	AdjustScrollbar();
 	Refresh(false);
+
+	int total_events = static_cast<int>(context->ass->Events.size());
+	int displayed_rows = static_cast<int>(index_line_map.size());
+	FilterCountsChanged(displayed_rows, total_events);
+
+	if (apply_filter && !index_line_map.empty()) {
+		AssDialogue *active = context->selectionController->GetActiveLine();
+		if (GetRowFromDialogue(active) == -1) {
+			context->selectionController->SetActiveLine(index_line_map[0]);
+		}
+	}
 }
 
 void BaseGrid::UpdateOverlapRows() {
@@ -394,6 +446,11 @@ void BaseGrid::OnReviewModeChanged(bool active) {
 	review_mode = active;
 	if (!active) overlap_highlight = false;
 	if (!active) playback_row = -1;
+	if (!active) {
+		filter_active = false;
+		filter_query.clear();
+		UpdateMaps();
+	}
 	else OnSeek();
 	Refresh(false);
 }
@@ -578,6 +635,11 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 		dc.SetPen(wxPen(to_wx(OPT_GET("Colour/Subtitle Grid/Active Border")->GetColor())));
 		dc.SetBrush(*wxTRANSPARENT_BRUSH);
 		dc.DrawRectangle(0, (active_grid_row - yPos + 1) * lineHeight, w, lineHeight + 1);
+	}
+
+	if (GetRows() == 0 && filter_active) {
+		dc.SetTextForeground(wxColour(130, 130, 130));
+		dc.DrawText(to_wx("（无匹配的字幕行，请修改筛选条件或点击清除）"), grid_x + 20, lineHeight * 2);
 	}
 }
 
@@ -960,4 +1022,136 @@ void BaseGrid::SetByFrame(bool state) {
 		column->SetByFrame(byFrame);
 	SetColumnWidths();
 	Refresh(false);
+}
+
+void BaseGrid::SetFilter(int field, const wxString& query) {
+	filter_field = field;
+	filter_query = query.Strip(wxString::both);
+	filter_active = !filter_query.empty();
+	UpdateMaps();
+}
+
+void BaseGrid::ClearFilter() {
+	if (!filter_active && filter_query.empty()) return;
+	filter_active = false;
+	filter_query.clear();
+	UpdateMaps();
+}
+
+int BaseGrid::GetTotalEventsCount() const {
+	return context ? static_cast<int>(context->ass->Events.size()) : 0;
+}
+
+ReviewFilterBar::ReviewFilterBar(wxWindow *parent, agi::Context *context, BaseGrid *grid)
+: wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL)
+, context(context)
+, grid(grid)
+{
+	SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+
+	auto sizer = new wxBoxSizer(wxHORIZONTAL);
+
+	label = new wxStaticText(this, wxID_ANY, to_wx("审校筛选:"));
+	wxFont font = label->GetFont();
+	font.SetWeight(wxFONTWEIGHT_BOLD);
+	label->SetFont(font);
+	sizer->Add(label, 0, wxALIGN_CENTRE_VERTICAL | wxLEFT | wxRIGHT, 6);
+
+	wxArrayString fields;
+	fields.Add(to_wx("全部字段"));
+	fields.Add(to_wx("文本"));
+	fields.Add(to_wx("说话人"));
+	fields.Add(to_wx("样式"));
+	field_choice = new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, fields);
+	field_choice->SetSelection(0);
+	sizer->Add(field_choice, 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 6);
+
+	query_ctrl = new wxTextCtrl(this, wxID_ANY, "", wxDefaultPosition, wxSize(220, -1), wxTE_PROCESS_ENTER);
+	query_ctrl->SetHint(to_wx("输入包含的文字进行筛选..."));
+	sizer->Add(query_ctrl, 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+
+	count_label = new wxStaticText(this, wxID_ANY, to_wx("共 0 行"));
+	sizer->Add(count_label, 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+
+	clear_btn = new wxButton(this, wxID_ANY, to_wx("清除"), wxDefaultPosition, wxSize(50, -1));
+	sizer->Add(clear_btn, 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 6);
+
+	SetSizer(sizer);
+
+	query_ctrl->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { OnQueryUpdated(); });
+	query_ctrl->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent&) {
+		if (this->grid) this->grid->SetFocus();
+	});
+	query_ctrl->Bind(wxEVT_CHAR_HOOK, [this](wxKeyEvent& evt) {
+		if (evt.GetKeyCode() == WXK_ESCAPE) {
+			Clear();
+		} else {
+			evt.Skip();
+		}
+	});
+
+	field_choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { OnQueryUpdated(); });
+	clear_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { Clear(); });
+
+	filter_conn = grid->FilterCountsChanged.Connect([this](int displayed, int total) {
+		UpdateCountLabel(displayed, total);
+	});
+	review_conn = context->videoController->AddReviewModeListener(&ReviewFilterBar::OnReviewModeChanged, this);
+}
+
+ReviewFilterBar::~ReviewFilterBar() = default;
+
+void ReviewFilterBar::OnQueryUpdated() {
+	if (!grid) return;
+	int field = field_choice->GetSelection();
+	wxString q = query_ctrl->GetValue();
+	grid->SetFilter(field, q);
+}
+
+void ReviewFilterBar::Clear() {
+	if (query_ctrl->GetValue().empty()) {
+		if (grid && grid->HasActiveFilter()) {
+			grid->ClearFilter();
+			if (grid) grid->SetFocus();
+		}
+		return;
+	}
+	query_ctrl->ChangeValue("");
+	if (grid) {
+		grid->ClearFilter();
+		grid->SetFocus();
+	}
+	int total = grid ? grid->GetTotalEventsCount() : 0;
+	int displayed = grid ? grid->GetRows() : 0;
+	UpdateCountLabel(displayed, total);
+}
+
+void ReviewFilterBar::UpdateCountLabel(int displayed, int total) {
+	if (!grid || !grid->HasActiveFilter()) {
+		count_label->SetLabel(wxString::Format(to_wx("共 %d 行"), total));
+		count_label->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
+	} else {
+		count_label->SetLabel(wxString::Format(to_wx("显示 %d / %d 行"), displayed, total));
+		if (displayed == 0) {
+			count_label->SetForegroundColour(wxColour(190, 40, 40));
+		} else {
+			count_label->SetForegroundColour(wxColour(20, 120, 20));
+		}
+	}
+	Layout();
+	if (GetParent()) GetParent()->Layout();
+}
+
+void ReviewFilterBar::OnReviewModeChanged(bool active) {
+	if (active) {
+		Show(true);
+		int total = grid ? grid->GetTotalEventsCount() : 0;
+		int displayed = grid ? grid->GetRows() : 0;
+		UpdateCountLabel(displayed, total);
+		if (GetParent()) GetParent()->Layout();
+	} else {
+		Clear();
+		Show(false);
+		if (GetParent()) GetParent()->Layout();
+	}
 }

@@ -275,9 +275,9 @@ struct video_details final : public validator_video_loaded {
 
 struct video_frame_match_settings final : public Command {
 	CMD_NAME("video/frame_match_settings")
-	wxString StrMenu(const agi::Context *) const override { return to_wx("对帧模式与望言OCR设置 (Frame Match Settings)..."); }
-	wxString StrDisplay(const agi::Context *) const override { return to_wx("对帧模式与望言OCR设置"); }
-	wxString StrHelp() const override { return to_wx("设置视觉对帧引擎(自动/望言OCR/内建DBNet/经典像素)及望言OCR路径"); }
+	wxString StrMenu(const agi::Context *) const override { return to_wx("对帧匹配设置..."); }
+	wxString StrDisplay(const agi::Context *) const override { return to_wx("对帧匹配设置"); }
+	wxString StrHelp() const override { return to_wx("设置视觉对帧引擎与匹配参数阈值"); }
 
 	void operator()(agi::Context *c) override {
 		ShowFrameMatchSettingsDialog(c);
@@ -286,7 +286,7 @@ struct video_frame_match_settings final : public Command {
 
 struct video_motion_track final : public validator_video_loaded {
 	CMD_NAME("video/motion_track")
-	wxString StrMenu(const agi::Context *) const override { return to_wx("运动追踪与相对位移 (Motion Tracking)..."); }
+	wxString StrMenu(const agi::Context *) const override { return to_wx("运动追踪与相对位移..."); }
 	wxString StrDisplay(const agi::Context *) const override { return to_wx("运动追踪与相对位移"); }
 	wxString StrHelp() const override { return to_wx("在视频画面上拖拽框选花字目标并生成逐帧相对位移字幕"); }
 
@@ -758,9 +758,9 @@ struct review_play_pause final : public validator_video_loaded {
 
 struct review_preview final : public validator_video_loaded {
 	CMD_NAME("review/preview")
-	wxString StrMenu(const agi::Context *) const override { return to_wx("预览当前字幕 (±1秒)"); }
+	wxString StrMenu(const agi::Context *) const override { return to_wx("预览当前字幕（±1秒）"); }
 	wxString StrDisplay(const agi::Context *) const override { return ""; }
-	wxString StrHelp() const override { return to_wx("单句预览 (±1秒)：播放当前选中字幕及其前后各1秒的画面"); }
+	wxString StrHelp() const override { return to_wx("单句预览（±1秒）：播放当前选中字幕及其前后各1秒的画面"); }
 
 	wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
 		static const char svg[] =

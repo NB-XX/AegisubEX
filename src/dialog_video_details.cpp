@@ -78,16 +78,16 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 
 	video_sizer->Add(fg);
 
-	auto frame_match_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, to_wx("视觉对帧助手 (Frame Match)"));
+	auto frame_match_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, to_wx("视觉对帧助手"));
 	auto frame_match_box = frame_match_sizer->GetStaticBox();
 
 	// 1. Engine Choice
 	auto engine_row = new wxBoxSizer(wxHORIZONTAL);
 	engine_row->Add(new wxStaticText(frame_match_box, -1, to_wx("匹配引擎:")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
 	wxArrayString engine_choices;
-	engine_choices.Add(to_wx("智能双模 (推荐: DBNet笔画检测，自动降级像素)"));
-	engine_choices.Add(to_wx("深度学习笔画检测 (DirectML GPU加速，抗复杂运动背景)"));
-	engine_choices.Add(to_wx("经典原生双极性像素模式 (Dice掩模快速对比)"));
+	engine_choices.Add(to_wx("智能双模（推荐：笔画检测，自动回退像素）"));
+	engine_choices.Add(to_wx("深度学习笔画检测（神经网络，抗复杂背景）"));
+	engine_choices.Add(to_wx("经典原生像素模式（快速对比）"));
 	auto engine_choice = new wxChoice(frame_match_box, -1, wxDefaultPosition, wxDefaultSize, engine_choices);
 	int cur_engine = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 2));
 	engine_choice->SetSelection(cur_engine);
@@ -120,7 +120,7 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 }
 
 void ShowFrameMatchSettingsDialog(agi::Context *c) {
-	wxDialog d(c->parent, -1, to_wx("视觉对帧匹配设置 (Frame Match Settings)"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+	wxDialog d(c->parent, -1, to_wx("视觉对帧匹配设置"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
 
 	auto main_sizer = new wxBoxSizer(wxVERTICAL);
 
@@ -131,9 +131,9 @@ void ShowFrameMatchSettingsDialog(agi::Context *c) {
 	auto engine_row = new wxBoxSizer(wxHORIZONTAL);
 	engine_row->Add(new wxStaticText(frame_match_box, -1, to_wx("匹配引擎:")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
 	wxArrayString engine_choices;
-	engine_choices.Add(to_wx("智能双模 (推荐: DBNet笔画检测，自动降级像素)"));
-	engine_choices.Add(to_wx("深度学习笔画检测 (DirectML GPU加速，抗复杂运动背景)"));
-	engine_choices.Add(to_wx("经典原生双极性像素模式 (Dice掩模快速对比)"));
+	engine_choices.Add(to_wx("智能双模（推荐：笔画检测，自动回退像素）"));
+	engine_choices.Add(to_wx("深度学习笔画检测（神经网络，抗复杂背景）"));
+	engine_choices.Add(to_wx("经典原生像素模式（快速对比）"));
 	auto engine_choice = new wxChoice(frame_match_box, -1, wxDefaultPosition, wxDefaultSize, engine_choices);
 	int cur_engine = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 2));
 	engine_choice->SetSelection(cur_engine);
@@ -148,11 +148,11 @@ void ShowFrameMatchSettingsDialog(agi::Context *c) {
 	auto update_engine_tip = [engine_choice, engine_tip]() {
 		int sel = engine_choice->GetSelection();
 		if (sel == 0) {
-			engine_tip->SetLabel(to_wx("智能双模: 优先采用 DBNet 文字笔画与连续性检测；无明确笔画或无GPU加速时自动回退经典像素模式。"));
+			engine_tip->SetLabel(to_wx("智能双模：优先采用文字笔画连续性检测；无明确笔画时自动回退经典像素模式。"));
 		} else if (sel == 1) {
-			engine_tip->SetLabel(to_wx("深度学习笔画检测: 基于 DirectML 与 PP-OCRv4 神经网络提取文字笔画概率，彻底免疫复杂运动与闪烁背景。"));
+			engine_tip->SetLabel(to_wx("深度学习笔画检测：提取文字笔画概率，彻底抗复杂运动与闪烁背景。"));
 		} else {
-			engine_tip->SetLabel(to_wx("经典原生像素: 采用原生双极性二值化掩模与 Dice 相似度算法，纯 CPU 计算，毫秒级响应。"));
+			engine_tip->SetLabel(to_wx("经典原生像素：采用双极性二值化掩模与相似度算法，纯 CPU 计算，毫秒级响应。"));
 		}
 	};
 	update_engine_tip();
@@ -164,12 +164,12 @@ void ShowFrameMatchSettingsDialog(agi::Context *c) {
 	wxString hw_desc;
 	if (DBNetDetector::Get().IsAvailable()) {
 		if (DBNetDetector::Get().IsGPU()) {
-			hw_desc = to_wx("状态: 深度学习引擎就绪 (DirectML GPU 硬件加速已启用，PP-OCRv4 模型正常)");
+			hw_desc = to_wx("状态：深度学习引擎就绪（GPU 硬件加速已启用）");
 		} else {
-			hw_desc = to_wx("状态: 深度学习引擎就绪 (CPU 多线程推断模式，PP-OCRv4 模型正常)");
+			hw_desc = to_wx("状态：深度学习引擎就绪（CPU 多线程推断模式）");
 		}
 	} else {
-		hw_desc = to_wx("状态: 未检测到 ONNXRuntime / DBNet 模型，默认使用原生双极性像素引擎");
+		hw_desc = to_wx("状态：未检测到神经网络模型，默认使用原生像素引擎");
 	}
 	auto hw_text = new wxStaticText(hw_box, -1, hw_desc);
 	if (DBNetDetector::Get().IsAvailable()) {

@@ -22,26 +22,17 @@ msgstr "对帧辅助"
 msgid "Match Engine:"
 msgstr "对帧引擎："
 
-msgid "Auto (SubtitleOCR -> DBNet -> Classic)"
-msgstr "自动选择 (望言OCR -> DBNet -> 经典原生)"
+msgid "Auto (DBNet -> Classic)"
+msgstr "智能双模（笔画检测与像素互补）"
 
-msgid "SubtitleOCR External Engine (望言OCR)"
-msgstr "望言 OCR 外部引擎 (SubtitleOCR)"
+msgid "Native DBNet Neural Matcher"
+msgstr "内置文字笔画神经网络对帧"
 
-msgid "Native DBNet Neural Matcher (内置深度学习)"
-msgstr "内置 DBNet 神经网络对帧"
-
-msgid "Classic Native Pixel Matcher (经典原生像素/Dice)"
-msgstr "经典原生像素/Dice 掩模对帧"
-
-msgid "SubtitleOCR Path:"
-msgstr "望言OCR 路径："
-
-msgid "Select SubtitleOCR (望言OCR) Directory"
-msgstr "选择望言OCR (SubtitleOCR) 所在目录"
+msgid "Classic Native Pixel Matcher"
+msgstr "经典原生像素对帧"
 
 msgid "Frame Match"
-msgstr "对帧"
+msgstr "视觉对帧"
 
 msgid "Batch Frame Match"
 msgstr "批量对帧"
