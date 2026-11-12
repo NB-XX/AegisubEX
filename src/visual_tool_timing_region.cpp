@@ -991,6 +991,29 @@ void VisualToolTimingRegion::DetectInterval() {
 				wxSafeYield(parent, true);
 				return progress.Update(std::min(samples, total_work));
 			}, &status, &cache, -1, &engine_used);
+
+		// 智能自适应兜底：若当前画面暂停帧未能提取到清晰图案（例如停留在无字/提前淡出时刻）
+		// 自动在当前字幕行的时间中点 (Start + End) / 2 所对应的画面帧重试
+		if ((!ok || status == kMatchNoPattern) && line && line->End > line->Start) {
+			int mid_time = static_cast<int>(line->Start + (line->End - line->Start) / 2);
+			int mid_frame = std::clamp(c->videoController->FrameAtTime(mid_time, agi::vfr::START), 0, frame_count - 1);
+			if (mid_frame != reference_frame) {
+				int retry_status = kMatchOk;
+				int retry_engine = 0;
+				MaskCache retry_cache;
+				bool retry_ok = MatchLineToRegion(c, line, PixelRegion{x0, y0, x1, y1}, mid_frame, new_start, new_end,
+					minimum_similarity, -1, -1,
+					[&](int samples) {
+						wxSafeYield(parent, true);
+						return progress.Update(std::min(samples, total_work));
+					}, &retry_status, &retry_cache, -1, &retry_engine);
+				if (retry_ok && retry_status == kMatchOk) {
+					ok = true;
+					status = retry_status;
+					engine_used = retry_engine;
+				}
+			}
+		}
 	}
 	catch (std::exception const& e) {
 		wxMessageBox(_("Could not scan video frames: ") + to_wx(e.what()), _("Frame Match Assistant"), wxOK | wxICON_ERROR, parent);

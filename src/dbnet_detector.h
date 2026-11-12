@@ -533,12 +533,12 @@ public:
 				}
 			}
 
-			// 在 target_ax 附近寻找最近的活跃文字列（容忍锚点落在两字之间或词间空格）
+			// 在 target_ax 附近寻找最近的活跃文字列（容忍锚点落在两字之间或韩文/西文词间空格）
 			int seed_tx = -1;
 			int best_dist = 999999;
-			int search_radius = std::max(12, target_h / 2);
+			int search_radius = std::max(24, target_h);
 			for (int tx = std::max(0, target_ax - search_radius); tx <= std::min(target_w - 1, target_ax + search_radius); ++tx) {
-				if (col_hits[tx] >= 2) {
+				if (col_hits[tx] >= 1) {
 					int d = std::abs(tx - target_ax);
 					if (d < best_dist) {
 						best_dist = d;
@@ -548,14 +548,14 @@ public:
 			}
 
 			if (seed_tx >= 0) {
-				// 词间空格允许的最大连通跳隙（韩语/英语/中文词间距通常为字高的 1/4 ~ 1/3）
-				int max_gap = std::max(5, target_h / 4);
+				// 词间空格允许的最大连通跳隙（韩语/西文词间距显著，允许跨越空格连通完整句子）
+				int max_gap = std::max(8, target_h * 3 / 5);
 
 				// 向左膨胀连通
 				int min_tx = seed_tx;
 				int gap = 0;
 				for (int tx = seed_tx - 1; tx >= 0; --tx) {
-					if (col_hits[tx] >= 2) {
+					if (col_hits[tx] >= 1) {
 						min_tx = tx;
 						gap = 0;
 					} else {
@@ -567,7 +567,7 @@ public:
 				int max_tx = seed_tx;
 				gap = 0;
 				for (int tx = seed_tx + 1; tx < target_w; ++tx) {
-					if (col_hits[tx] >= 2) {
+					if (col_hits[tx] >= 1) {
 						max_tx = tx;
 						gap = 0;
 					} else {
@@ -588,7 +588,7 @@ public:
 					}
 				}
 
-				if (total_active >= 12 && max_ty >= min_ty) {
+				if (total_active >= 8 && max_ty >= min_ty) {
 					int raw_x0 = strip_x0 + (min_tx * strip_w) / target_w;
 					int raw_x1 = strip_x0 + (max_tx * strip_w) / target_w;
 					int raw_y0 = strip_y0 + (min_ty * strip_h) / target_h;
