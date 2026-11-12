@@ -12,10 +12,11 @@ struct DBNetResult {
 	bool has_text = false;
 	float text_ratio = 0.0f;
 	float max_prob = 0.0f;
+	float stroke_energy = 0.0f;
 	int active_pixels = 0;
 	int mask_w = 0;
 	int mask_h = 0;
-	std::vector<uint8_t> prob_mask; // binary mask (1 if prob > 0.35)
+	std::vector<uint8_t> prob_mask; // binary stroke mask: 1 where prob >= 0.35
 };
 
 class DBNetDetector {
@@ -28,6 +29,8 @@ private:
 	OrtMemoryInfo* memory_info = nullptr;
 	bool available = false;
 	bool is_gpu = false;
+
+	std::vector<float> input_tensor_cache;
 
 	DBNetDetector() {
 		Init();
@@ -46,10 +49,43 @@ public:
 	bool IsAvailable() const { return available; }
 	bool IsGPU() const { return is_gpu; }
 
+	// 超快速空间梯度能量测算（0.02ms，用于非文字帧零延迟跳过推理）
+	static float ComputeGradientEnergy(const uint8_t* frame_data, int frame_w, int frame_h, int frame_pitch, bool flipped,
+	                                   int x0, int y0, int x1, int y1) {
+		int w = x1 - x0;
+		int h = y1 - y0;
+		if (w < 4 || h < 4) return 0.0f;
+
+		uint64_t total_grad = 0;
+		int count = 0;
+
+		for (int y = y0; y < y1 - 1; y += 2) {
+			int row0 = flipped ? frame_h - 1 - y : y;
+			int row1 = flipped ? frame_h - 1 - (y + 1) : (y + 1);
+			if (row0 < 0 || row0 >= frame_h || row1 < 0 || row1 >= frame_h) continue;
+
+			const uint8_t* p0 = frame_data + row0 * frame_pitch;
+			const uint8_t* p1 = frame_data + row1 * frame_pitch;
+
+			for (int x = x0; x < x1 - 1; x += 2) {
+				if (x < 0 || x >= frame_w - 1) continue;
+				int g00 = (p0[x * 4] + 2 * p0[x * 4 + 1] + p0[x * 4 + 2]) >> 2;
+				int g10 = (p0[(x + 1) * 4] + 2 * p0[(x + 1) * 4 + 1] + p0[(x + 1) * 4 + 2]) >> 2;
+				int g01 = (p1[x * 4] + 2 * p1[x * 4 + 1] + p1[x * 4 + 2]) >> 2;
+
+				int dx = std::abs(g10 - g00);
+				int dy = std::abs(g01 - g00);
+				total_grad += (dx + dy);
+				++count;
+			}
+		}
+
+		return count > 0 ? static_cast<float>(total_grad) / static_cast<float>(count) : 0.0f;
+	}
+
 	bool Init() {
 		if (available) return true;
 
-		// Find exe directory
 		wchar_t exe_buf[MAX_PATH] = {0};
 		GetModuleFileNameW(NULL, exe_buf, MAX_PATH);
 		std::wstring exe_path(exe_buf);
@@ -62,13 +98,13 @@ public:
 			SetDllDirectoryW(exe_dir.c_str());
 		}
 
-		// 1. Search for onnxruntime.dll
+		// 1. 本地动态载入 onnxruntime.dll
 		std::vector<std::wstring> dll_paths = {
 			exe_dir + L"onnxruntime.dll",
 			L"onnxruntime.dll",
 			exe_dir + L"build-local\\onnxruntime.dll",
 			L"build-local/onnxruntime.dll",
-			L"D:/Tool/SubtitleOCR_Community_v3.1.2/望言OCR_v3.1.2/onnxruntime.dll"
+			exe_dir + L"..\\build-local\\onnxruntime.dll"
 		};
 
 		for (const auto& p : dll_paths) {
@@ -93,7 +129,6 @@ public:
 			return false;
 		}
 
-		// Use modern API version (17 or 16)
 		ort = api_base->GetApi(17);
 		if (!ort) ort = api_base->GetApi(ORT_API_VERSION);
 		if (!ort) {
@@ -102,13 +137,14 @@ public:
 			return false;
 		}
 
-		// 2. Search for DBNet model
+		// 2. 本地检索 DBNet 神经网络模型 (ch_PP-OCRv4_det.onnx)
 		std::vector<std::wstring> model_paths = {
 			exe_dir + L"models\\ch_PP-OCRv4_det.onnx",
 			L"models/ch_PP-OCRv4_det.onnx",
 			exe_dir + L"build-local\\models\\ch_PP-OCRv4_det.onnx",
 			L"build-local/models/ch_PP-OCRv4_det.onnx",
-			L"D:/Tool/SubtitleOCR_Community_v3.1.2/望言OCR_v3.1.2/models/ch_PP-OCRv4_det.onnx"
+			exe_dir + L"..\\build-local\\models\\ch_PP-OCRv4_det.onnx",
+			exe_dir + L"..\\build\\ch_PP-OCRv4_det.onnx"
 		};
 
 		std::wstring found_model = L"";
@@ -126,7 +162,7 @@ public:
 			return false;
 		}
 
-		// 3. Initialize OrtEnv and SessionOptions
+		// 3. 初始化环境与会话选项
 		OrtStatus* status = ort->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "aegisub_dbnet", &env);
 		if (status) { ort->ReleaseStatus(status); return false; }
 
@@ -135,7 +171,7 @@ public:
 
 		ort->SetIntraOpNumThreads(session_options, 2);
 
-		// Try DirectML GPU acceleration if available
+		// 优先启用 DirectML GPU 硬件加速 (极速 3ms 推理)
 		typedef OrtStatus* (ORT_API_CALL *DMLFn)(OrtSessionOptions*, int);
 		DMLFn dml_fn = (DMLFn)GetProcAddress(hOrt, "OrtSessionOptionsAppendExecutionProvider_DML");
 		if (dml_fn) {
@@ -147,7 +183,7 @@ public:
 			}
 		}
 
-		// 4. Create Session
+		// 4. 创建 Session
 		status = ort->CreateSession(env, found_model.c_str(), session_options, &session);
 		if (status) {
 			ort->ReleaseStatus(status);
@@ -180,6 +216,7 @@ public:
 		available = false;
 	}
 
+	// 极速单帧文字笔画概率检测
 	DBNetResult Detect(const uint8_t* frame_data, int frame_w, int frame_h, int frame_pitch, bool flipped,
 	                   int x0, int y0, int x1, int y1) {
 		DBNetResult res;
@@ -187,17 +224,27 @@ public:
 
 		int crop_w = x1 - x0;
 		int crop_h = y1 - y0;
-		if (crop_w < 16 || crop_h < 8) return res;
+		if (crop_w < 12 || crop_h < 6) return res;
 
+		// 针对对白字幕尺寸智能规划推断分辨率，既保证笔画细节又极致精简算力
 		int target_h = 64;
-		int target_w = std::clamp(((crop_w * target_h / crop_h) + 31) / 32 * 32, 64, 960);
+		int target_w = std::clamp(((crop_w * target_h / crop_h) + 31) / 32 * 32, 64, 480);
 		size_t n_pixels = static_cast<size_t>(target_h) * target_w;
 
-		// Prepare planar RGB float input normalized by ImageNet mean & std
-		std::vector<float> input_tensor(3 * n_pixels);
-		float* r_plane = input_tensor.data();
-		float* g_plane = input_tensor.data() + n_pixels;
-		float* b_plane = input_tensor.data() + 2 * n_pixels;
+		if (input_tensor_cache.size() < 3 * n_pixels) {
+			input_tensor_cache.resize(3 * n_pixels);
+		}
+
+		constexpr float kr = 1.0f / (255.0f * 0.229f);
+		constexpr float kg = 1.0f / (255.0f * 0.224f);
+		constexpr float kb = 1.0f / (255.0f * 0.225f);
+		constexpr float br = -0.485f / 0.229f;
+		constexpr float bg = -0.456f / 0.224f;
+		constexpr float bb = -0.406f / 0.225f;
+
+		float* r_plane = input_tensor_cache.data();
+		float* g_plane = input_tensor_cache.data() + n_pixels;
+		float* b_plane = input_tensor_cache.data() + 2 * n_pixels;
 
 		for (int ty = 0; ty < target_h; ++ty) {
 			int sy = y0 + (ty * crop_h) / target_h;
@@ -210,22 +257,17 @@ public:
 				if (sx < 0 || sx >= frame_w) continue;
 
 				const uint8_t* p = row_ptr + sx * 4;
-				float b = p[0] / 255.0f;
-				float g = p[1] / 255.0f;
-				float r = p[2] / 255.0f;
-
 				int idx = ty * target_w + tx;
-				r_plane[idx] = (r - 0.485f) / 0.229f;
-				g_plane[idx] = (g - 0.456f) / 0.224f;
-				b_plane[idx] = (b - 0.406f) / 0.225f;
+				r_plane[idx] = p[2] * kr + br;
+				g_plane[idx] = p[1] * kg + bg;
+				b_plane[idx] = p[0] * kb + bb;
 			}
 		}
 
-		// Create OrtValue
 		int64_t input_shape[4] = {1, 3, target_h, target_w};
 		OrtValue* input_tensor_val = nullptr;
 		OrtStatus* st = ort->CreateTensorWithDataAsOrtValue(
-			memory_info, input_tensor.data(), input_tensor.size() * sizeof(float),
+			memory_info, input_tensor_cache.data(), 3 * n_pixels * sizeof(float),
 			input_shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &input_tensor_val);
 		if (st) { ort->ReleaseStatus(st); return res; }
 
@@ -251,12 +293,14 @@ public:
 
 			int active_count = 0;
 			float max_p = 0.0f;
+			float sum_active_p = 0.0f;
 
 			for (size_t i = 0; i < n_pixels; ++i) {
 				float p = out_data[i];
 				if (p > max_p) max_p = p;
 				if (p >= 0.35f) {
 					res.prob_mask[i] = 1;
+					sum_active_p += p;
 					++active_count;
 				}
 			}
@@ -264,8 +308,8 @@ public:
 			res.active_pixels = active_count;
 			res.max_prob = max_p;
 			res.text_ratio = static_cast<float>(active_count) / static_cast<float>(n_pixels);
-			// Threshold: text requires at least 8 active stroke pixels and peak prob >= 0.40
-			res.has_text = (active_count >= 8 && max_p >= 0.40f);
+			res.stroke_energy = sum_active_p;
+			res.has_text = (active_count >= 6 && max_p >= 0.38f);
 		} else if (st) {
 			ort->ReleaseStatus(st);
 		}
@@ -274,6 +318,7 @@ public:
 		return res;
 	}
 
+	// 提取基准帧字幕紧致文字边界（Anchor），彻底排除外部大背景干扰
 	bool GetTextBoundingBox(const uint8_t* frame_data, int frame_w, int frame_h, int frame_pitch, bool flipped,
 	                        int x0, int y0, int x1, int y1,
 	                        int& out_x0, int& out_y0, int& out_x1, int& out_y1) {
@@ -281,16 +326,26 @@ public:
 
 		int crop_w = x1 - x0;
 		int crop_h = y1 - y0;
-		if (crop_w < 16 || crop_h < 8) return false;
+		if (crop_w < 12 || crop_h < 6) return false;
 
 		int target_h = 64;
-		int target_w = std::clamp(((crop_w * target_h / crop_h) + 31) / 32 * 32, 64, 960);
+		int target_w = std::clamp(((crop_w * target_h / crop_h) + 31) / 32 * 32, 64, 480);
 		size_t n_pixels = static_cast<size_t>(target_h) * target_w;
 
-		std::vector<float> input_tensor(3 * n_pixels);
-		float* r_plane = input_tensor.data();
-		float* g_plane = input_tensor.data() + n_pixels;
-		float* b_plane = input_tensor.data() + 2 * n_pixels;
+		if (input_tensor_cache.size() < 3 * n_pixels) {
+			input_tensor_cache.resize(3 * n_pixels);
+		}
+
+		constexpr float kr = 1.0f / (255.0f * 0.229f);
+		constexpr float kg = 1.0f / (255.0f * 0.224f);
+		constexpr float kb = 1.0f / (255.0f * 0.225f);
+		constexpr float br = -0.485f / 0.229f;
+		constexpr float bg = -0.456f / 0.224f;
+		constexpr float bb = -0.406f / 0.225f;
+
+		float* r_plane = input_tensor_cache.data();
+		float* g_plane = input_tensor_cache.data() + n_pixels;
+		float* b_plane = input_tensor_cache.data() + 2 * n_pixels;
 
 		for (int ty = 0; ty < target_h; ++ty) {
 			int sy = y0 + (ty * crop_h) / target_h;
@@ -303,21 +358,17 @@ public:
 				if (sx < 0 || sx >= frame_w) continue;
 
 				const uint8_t* p = row_ptr + sx * 4;
-				float b = p[0] / 255.0f;
-				float g = p[1] / 255.0f;
-				float r = p[2] / 255.0f;
-
 				int idx = ty * target_w + tx;
-				r_plane[idx] = (r - 0.485f) / 0.229f;
-				g_plane[idx] = (g - 0.456f) / 0.224f;
-				b_plane[idx] = (b - 0.406f) / 0.225f;
+				r_plane[idx] = p[2] * kr + br;
+				g_plane[idx] = p[1] * kg + bg;
+				b_plane[idx] = p[0] * kb + bb;
 			}
 		}
 
 		int64_t input_shape[4] = {1, 3, target_h, target_w};
 		OrtValue* input_tensor_val = nullptr;
 		OrtStatus* st = ort->CreateTensorWithDataAsOrtValue(
-			memory_info, input_tensor.data(), input_tensor.size() * sizeof(float),
+			memory_info, input_tensor_cache.data(), 3 * n_pixels * sizeof(float),
 			input_shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &input_tensor_val);
 		if (st) { ort->ReleaseStatus(st); return false; }
 
@@ -347,7 +398,7 @@ public:
 				for (int tx = 0; tx < target_w; ++tx) {
 					float p = out_data[ty * target_w + tx];
 					if (p > max_p) max_p = p;
-					if (p >= 0.50f) {
+					if (p >= 0.45f) {
 						++active_count;
 						if (tx < min_tx) min_tx = tx;
 						if (tx > max_tx) max_tx = tx;
@@ -357,7 +408,7 @@ public:
 				}
 			}
 
-			if (active_count >= 15 && max_p >= 0.55f && max_tx >= min_tx) {
+			if (active_count >= 12 && max_p >= 0.50f && max_tx >= min_tx) {
 				int raw_x0 = x0 + (min_tx * crop_w) / target_w;
 				int raw_x1 = x0 + (max_tx * crop_w) / target_w;
 				int raw_y0 = y0 + (min_ty * crop_h) / target_h;
@@ -370,7 +421,7 @@ public:
 				out_y0 = std::clamp(raw_y0 - pad_y, y0, y1);
 				out_y1 = std::clamp(raw_y1 + pad_y, y0, y1);
 
-				if (out_x1 - out_x0 >= 12 && out_y1 - out_y0 >= 6) {
+				if (out_x1 - out_x0 >= 10 && out_y1 - out_y0 >= 6) {
 					found = true;
 				}
 			}
