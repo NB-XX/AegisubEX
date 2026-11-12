@@ -689,6 +689,21 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 		catch (...) { }
 	};
 
+	int commit_id = -1;
+	int changed = 0;
+
+	// 核心特性：每完成一行，立即写回时间戳、刷新表格并跳转画面预览，提供极佳的交互动态感与防丢进度保障
+	auto apply_line_change = [&](AssDialogue *line, int start, int end) {
+		if (line->Start == start && line->End == end) return;
+		line->Start = start;
+		line->End = end;
+		++changed;
+		commit_id = context->ass->Commit(_("batch match subtitle timings"), AssFile::COMMIT_DIAG_TIME, commit_id, line);
+		context->selectionController->SetActiveLine(line);
+		context->videoController->JumpToTime(line->Start);
+		wxSafeYield(context->parent, true);
+	};
+
 	int total_steps = static_cast<int>(lines.size()) * 3 + 1;
 	wxProgressDialog progress(to_wx("批量视觉对帧助手 (Batch Frame Match)"),
 		to_wx("正在根据竖线锚点与自适应文字模型批量对帧..."),
@@ -699,12 +714,14 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 	int last_end_ms = -1;
 	for (size_t i = 0; i < lines.size(); ++i) {
 		wxSafeYield(context->parent, true);
+		AssDialogue *line = lines[i];
+		size_t pos = index[line];
+
 		if (!progress.Update(static_cast<int>(i), wxString::Format(to_wx("正在匹配第 %d / %d 行..."), static_cast<int>(i + 1), static_cast<int>(lines.size())))) {
 			aborted = true;
 			break;
 		}
-		AssDialogue *line = lines[i];
-		size_t pos = index[line];
+
 		int hint = -1;
 		if (last_end_ms >= 0) {
 			int gap = static_cast<int>(line->Start) - last_end_ms;
@@ -712,7 +729,20 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 				hint = context->videoController->FrameAtTime(std::max(0, last_end_ms), agi::vfr::START);
 		}
 		try_match(line, pos, base_similarity, -1, -1, hint);
-		last_end_ms = cur[pos].second;
+
+		// 匹配完一行，立即写回时间戳、刷新表格并跳转视频画面！
+		if (cur[pos].first < cur[pos].second) {
+			apply_line_change(line, cur[pos].first, cur[pos].second);
+			last_end_ms = cur[pos].second;
+		}
+
+		// 实时更新进度条提示，展示当前行刚刚对帧完成的时间区间
+		progress.Update(static_cast<int>(i + 1), wxString::Format(
+			to_wx("对帧完成第 %d / %d 行 [%s - %s]..."),
+			static_cast<int>(i + 1), static_cast<int>(lines.size()),
+			to_wx(agi::Time(line->Start).GetAssFormatted()),
+			to_wx(agi::Time(line->End).GetAssFormatted())));
+		wxSafeYield(context->parent, true);
 	}
 
 	if (!aborted) {
@@ -742,8 +772,12 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 			for (auto& [pos, b] : bounds) {
 				wxSafeYield(context->parent, true);
 				if (progress.WasCancelled()) { aborted = true; break; }
-				if (pos < order.size())
+				if (pos < order.size()) {
 					try_match(order[pos], pos, similarity, b.first, b.second);
+					if (cur[pos].first < cur[pos].second) {
+						apply_line_change(order[pos], cur[pos].first, cur[pos].second);
+					}
+				}
 			}
 			if (aborted) break;
 		}
@@ -756,19 +790,11 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 				cur[i].second = cur[i + 1].first;
 			if (cur[i].first >= cur[i].second)
 				cur[i] = orig(i);
+			apply_line_change(order[i], cur[i].first, cur[i].second);
 		}
 	}
 
-	int changed = 0;
-	for (auto line : lines) {
-		auto pos = index[line];
-		if (cur[pos] == orig(pos) || cur[pos].first >= cur[pos].second) continue;
-		line->Start = cur[pos].first;
-		line->End = cur[pos].second;
-		++changed;
-	}
 	if (changed) {
-		context->ass->Commit(_("batch match subtitle timings"), AssFile::COMMIT_DIAG_TIME);
 		if (context->frame) {
 			int engine_mode = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 2));
 			wxString mode_label;
@@ -777,7 +803,7 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 			else mode_label = to_wx("经典原生双极性像素 (Dice)");
 
 			context->frame->SetStatusText(wxString::Format(
-				to_wx("批量对帧完成：共更新 %d 行 [模式: %s]"),
+				to_wx("批量对帧完成：已实时更新 %d 行时间轴 [模式: %s]"),
 				changed, mode_label));
 		}
 	}
@@ -984,6 +1010,8 @@ void VisualToolTimingRegion::DetectInterval() {
 	line->Start = new_start;
 	line->End = new_end;
 	Commit(_("match subtitle timing to picked region"));
+	c->selectionController->SetActiveLine(line);
+	c->videoController->JumpToTime(line->Start);
 
 	wxString used_desc;
 	if (engine_used == 1) used_desc = to_wx("内建DBNet文字笔画检测 (DirectML GPU加速)");
