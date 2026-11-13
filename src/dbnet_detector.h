@@ -409,17 +409,20 @@ public:
 			}
 
 			if (active_count >= 12 && max_p >= 0.50f && max_tx >= min_tx) {
+				float center_ty = (min_ty + max_ty) / 2.0f;
+				int center_y = y0 + static_cast<int>(std::round((center_ty * crop_h) / target_h));
+				float core_h = (max_ty - min_ty) * crop_h / static_cast<float>(target_h);
+				int font_h = std::max(static_cast<int>(std::round(crop_h * 0.9f)), static_cast<int>(std::round(core_h * 1.6f)));
+				font_h = std::max(font_h, 20);
+
 				int raw_x0 = x0 + (min_tx * crop_w) / target_w;
 				int raw_x1 = x0 + (max_tx * crop_w) / target_w;
-				int raw_y0 = y0 + (min_ty * crop_h) / target_h;
-				int raw_y1 = y0 + (max_ty * crop_h) / target_h;
+				int pad_x = std::clamp(font_h / 3, 4, 16);
 
-				int pad_x = std::clamp(crop_w / 60, 2, 6);
-				int pad_y = std::clamp(crop_h / 40, 2, 4);
-				out_x0 = std::clamp(raw_x0 - pad_x, x0, x1);
-				out_x1 = std::clamp(raw_x1 + pad_x, x0, x1);
-				out_y0 = std::clamp(raw_y0 - pad_y, y0, y1);
-				out_y1 = std::clamp(raw_y1 + pad_y, y0, y1);
+				out_x0 = std::clamp(raw_x0 - pad_x, 0, frame_w - 1);
+				out_x1 = std::clamp(raw_x1 + pad_x, 0, frame_w);
+				out_y0 = std::clamp(center_y - font_h / 2, 0, frame_h - 1);
+				out_y1 = std::clamp(center_y + font_h / 2, 0, frame_h);
 
 				if (out_x1 - out_x0 >= 10 && out_y1 - out_y0 >= 6) {
 					found = true;
@@ -589,17 +592,20 @@ public:
 				}
 
 				if (total_active >= 8 && max_ty >= min_ty) {
+					float center_ty = (min_ty + max_ty) / 2.0f;
+					int center_y = strip_y0 + static_cast<int>(std::round((center_ty * strip_h) / target_h));
+					float core_h = (max_ty - min_ty) * strip_h / static_cast<float>(target_h);
+					int font_h = std::max(anchor_h, static_cast<int>(std::round(core_h * 1.6f)));
+					font_h = std::max(font_h, 24);
+
+					int pad_x = std::clamp(font_h / 3, 6, 20);
 					int raw_x0 = strip_x0 + (min_tx * strip_w) / target_w;
 					int raw_x1 = strip_x0 + (max_tx * strip_w) / target_w;
-					int raw_y0 = strip_y0 + (min_ty * strip_h) / target_h;
-					int raw_y1 = strip_y0 + (max_ty * strip_h) / target_h;
 
-					int pad_x = std::clamp(strip_w / 60, 4, 12);
-					int pad_y = std::clamp(strip_h / 30, 2, 6);
-					out_x0 = std::clamp(raw_x0 - pad_x, 0, frame_w);
+					out_x0 = std::clamp(raw_x0 - pad_x, 0, frame_w - 1);
 					out_x1 = std::clamp(raw_x1 + pad_x, 0, frame_w);
-					out_y0 = std::clamp(raw_y0 - pad_y, 0, frame_h);
-					out_y1 = std::clamp(raw_y1 + pad_y, 0, frame_h);
+					out_y0 = std::clamp(center_y - font_h / 2, 0, frame_h - 1);
+					out_y1 = std::clamp(center_y + font_h / 2, 0, frame_h);
 
 					if (out_x1 - out_x0 >= 16 && out_y1 - out_y0 >= 8) {
 						found = true;

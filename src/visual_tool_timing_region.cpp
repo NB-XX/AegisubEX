@@ -380,7 +380,7 @@ bool MatchLineNativePixel(agi::Context *c, AssDialogue *line, PixelRegion region
 bool MatchLineDBNetNeural(agi::Context *c, AssDialogue *line, PixelRegion region, int reference_frame,
 	int& new_start, int& new_end, int minimum_similarity, int bound_lo_ms = -1, int bound_hi_ms = -1,
 	const std::function<bool(int samples)>& on_sample = nullptr, int* status = nullptr,
-	int chain_hint_frame = -1) {
+	int chain_hint_frame = -1, bool is_anchor_mode = false) {
 	auto set_status = [&](int s) { if (status) *status = s; };
 	try {
 	if (!DBNetDetector::Get().IsAvailable()) {
@@ -400,42 +400,58 @@ bool MatchLineDBNetNeural(agi::Context *c, AssDialogue *line, PixelRegion region
 	double coord_scale_x = (provider->GetWidth() > 0 && ref_f->width > 0) ? (static_cast<double>(ref_f->width) / provider->GetWidth()) : 1.0;
 	double coord_scale_y = (provider->GetHeight() > 0 && ref_f->height > 0) ? (static_cast<double>(ref_f->height) / provider->GetHeight()) : 1.0;
 
-	// 1. 吸收 SubtitleOCR 先进思想：以竖线锚点（Anchor X, Y, Height）自适应探寻本行字幕的真实外接矩形
 	int s_x0 = static_cast<int>(std::round(region.x0 * coord_scale_x));
 	int s_y0 = static_cast<int>(std::round(region.y0 * coord_scale_y));
 	int s_x1 = static_cast<int>(std::round(region.x1 * coord_scale_x));
 	int s_y1 = static_cast<int>(std::round(region.y1 * coord_scale_y));
 
-	int anchor_x = (s_x0 + s_x1) / 2;
-	int anchor_y = (s_y0 + s_y1) / 2;
-	int anchor_h = std::max(16, s_y1 - s_y0);
-
 	int crop_x0 = s_x0, crop_y0 = s_y0, crop_x1 = s_x1, crop_y1 = s_y1;
-	int dyn_x0 = 0, dyn_y0 = 0, dyn_x1 = 0, dyn_y1 = 0;
-	bool has_anchor_box = DBNetDetector::Get().FindAnchorSubtitleBox(
-		ref_f->data.data(), ref_f->width, ref_f->height, ref_f->pitch, ref_f->flipped,
-		anchor_x, anchor_y, anchor_h,
-		dyn_x0, dyn_y0, dyn_x1, dyn_y1);
 
-	if (has_anchor_box) {
-		crop_x0 = dyn_x0;
-		crop_y0 = dyn_y0;
-		crop_x1 = dyn_x1;
-		crop_y1 = dyn_y1;
-	} else {
-		int out_x0 = s_x0, out_y0 = s_y0, out_x1 = s_x1, out_y1 = s_y1;
-		if (DBNetDetector::Get().GetTextBoundingBox(
+	if (is_anchor_mode) {
+		// 竖线锚点模式（或批量对帧时）：以竖线为基准自适应探索当前字幕的真实宽度
+		int anchor_x = (s_x0 + s_x1) / 2;
+		int anchor_y = (s_y0 + s_y1) / 2;
+		int anchor_h = std::max(16, s_y1 - s_y0);
+		int dyn_x0 = 0, dyn_y0 = 0, dyn_x1 = 0, dyn_y1 = 0;
+		if (DBNetDetector::Get().FindAnchorSubtitleBox(
 			ref_f->data.data(), ref_f->width, ref_f->height, ref_f->pitch, ref_f->flipped,
-			s_x0, s_y0, s_x1, s_y1,
-			out_x0, out_y0, out_x1, out_y1)) {
-			crop_x0 = out_x0; crop_y0 = out_y0; crop_x1 = out_x1; crop_y1 = out_y1;
+			anchor_x, anchor_y, anchor_h,
+			dyn_x0, dyn_y0, dyn_x1, dyn_y1)) {
+			crop_x0 = dyn_x0;
+			crop_y0 = dyn_y0;
+			crop_x1 = dyn_x1;
+			crop_y1 = dyn_y1;
 		}
+	} else {
+		// 用户明确画框模式：用户框定了该行字幕的具体范围（包含防止粘连下一行其他语言字幕的精确截断）
+		// 直接采用用户所框矩形，增加 2 像素边缘内边距以保证字形轮廓完整进入神经网络
+		int pad_y = std::clamp((s_y1 - s_y0) / 10, 1, 3);
+		int pad_x = std::clamp((s_x1 - s_x0) / 30, 1, 4);
+		crop_x0 = std::clamp(s_x0 - pad_x, 0, ref_f->width - 1);
+		crop_x1 = std::clamp(s_x1 + pad_x, 0, ref_f->width);
+		crop_y0 = std::clamp(s_y0 - pad_y, 0, ref_f->height - 1);
+		crop_y1 = std::clamp(s_y1 + pad_y, 0, ref_f->height);
 	}
 
 	// 提取基准帧的文字笔画概率图与边缘梯度能量
 	DBNetResult ref_db = DBNetDetector::Get().Detect(
 		ref_f->data.data(), ref_f->width, ref_f->height, ref_f->pitch, ref_f->flipped,
 		crop_x0, crop_y0, crop_x1, crop_y1);
+
+	// 容错兜底：若初始框判别文字点过少（例如用户选框稍微偏紧），向外微扩 3-4 像素再试一次
+	if (!ref_db.has_text || ref_db.active_pixels < 6) {
+		int exp_x0 = std::max(0, crop_x0 - 4);
+		int exp_x1 = std::min(ref_f->width, crop_x1 + 4);
+		int exp_y0 = std::max(0, crop_y0 - 3);
+		int exp_y1 = std::min(ref_f->height, crop_y1 + 3);
+		DBNetResult retry_db = DBNetDetector::Get().Detect(
+			ref_f->data.data(), ref_f->width, ref_f->height, ref_f->pitch, ref_f->flipped,
+			exp_x0, exp_y0, exp_x1, exp_y1);
+		if (retry_db.has_text && retry_db.active_pixels >= 6) {
+			crop_x0 = exp_x0; crop_y0 = exp_y0; crop_x1 = exp_x1; crop_y1 = exp_y1;
+			ref_db = retry_db;
+		}
+	}
 
 	if (!ref_db.has_text || ref_db.active_pixels < 6) {
 		set_status(kMatchNoPattern);
@@ -548,7 +564,7 @@ bool MatchLineDBNetNeural(agi::Context *c, AssDialogue *line, PixelRegion region
 	// 2. 扫描结束帧 (向右跳步定位失配点，再顺向精确定界)
 	int mismatch_right = right_limit;
 	int match_right = reference_frame;
-	for (int cand = reference_frame + step; cand <= right_limit && !cancelled; cand -= step) {
+	for (int cand = reference_frame + step; cand <= right_limit && !cancelled; cand += step) {
 		if (!matches(cand)) {
 			mismatch_right = cand;
 			break;
@@ -586,7 +602,7 @@ bool MatchLineDBNetNeural(agi::Context *c, AssDialogue *line, PixelRegion region
 bool MatchLineToRegion(agi::Context *c, AssDialogue *line, PixelRegion region, int reference_frame,
 	int& new_start, int& new_end, int minimum_similarity, int bound_lo_ms = -1, int bound_hi_ms = -1,
 	const std::function<bool(int samples)>& on_sample = nullptr, int* status = nullptr, MaskCache* shared_cache = nullptr,
-	int chain_hint_frame = -1, int* out_engine_used = nullptr) {
+	int chain_hint_frame = -1, int* out_engine_used = nullptr, bool is_anchor_mode = false) {
 	int engine_mode = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 2));
 	// 0: 智能双模 (优先 DBNet 笔画语义检测，自动回退经典像素模式)
 	// 1: 深度学习笔画检测 (强制 DBNet)
@@ -596,7 +612,7 @@ bool MatchLineToRegion(agi::Context *c, AssDialogue *line, PixelRegion region, i
 		if (DBNetDetector::Get().IsAvailable()) {
 			int neural_status = kMatchOk;
 			if (MatchLineDBNetNeural(c, line, region, reference_frame, new_start, new_end,
-					minimum_similarity, bound_lo_ms, bound_hi_ms, on_sample, &neural_status, chain_hint_frame)) {
+					minimum_similarity, bound_lo_ms, bound_hi_ms, on_sample, &neural_status, chain_hint_frame, is_anchor_mode)) {
 				if (status) *status = neural_status;
 				if (out_engine_used) *out_engine_used = 1;
 				return true;
@@ -683,7 +699,7 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 	auto try_match = [&](AssDialogue *line, size_t pos, int similarity, int lo, int hi, int hint_frame = -1) {
 		int start = line->Start, end = line->End;
 		try {
-			if (MatchLineToRegion(context, line, region, ref_frame(line), start, end, similarity, lo, hi, on_sample_pump, nullptr, nullptr, hint_frame))
+			if (MatchLineToRegion(context, line, region, ref_frame(line), start, end, similarity, lo, hi, on_sample_pump, nullptr, nullptr, hint_frame, nullptr, true))
 				cur[pos] = { start, end };
 		}
 		catch (...) { }
@@ -946,7 +962,8 @@ void VisualToolTimingRegion::DetectInterval() {
 
 	double dx = std::abs(end.X() - start.X());
 	double dy = std::abs(end.Y() - start.Y());
-	if (dx < 15.0 && dy >= 8.0) {
+	bool is_anchor_mode = (dx < 15.0 && dy >= 8.0);
+	if (is_anchor_mode) {
 		int ax = (x0 + x1) / 2;
 		int ah = std::max(16, y1 - y0);
 		int half_w = std::max(ah * 3, 120);
@@ -990,7 +1007,7 @@ void VisualToolTimingRegion::DetectInterval() {
 			[&](int samples) {
 				wxSafeYield(parent, true);
 				return progress.Update(std::min(samples, total_work));
-			}, &status, &cache, -1, &engine_used);
+			}, &status, &cache, -1, &engine_used, is_anchor_mode);
 
 		// 智能自适应兜底：若当前画面暂停帧未能提取到清晰图案（例如停留在无字/提前淡出时刻）
 		// 自动在当前字幕行的时间中点 (Start + End) / 2 所对应的画面帧重试
@@ -1006,7 +1023,7 @@ void VisualToolTimingRegion::DetectInterval() {
 					[&](int samples) {
 						wxSafeYield(parent, true);
 						return progress.Update(std::min(samples, total_work));
-					}, &retry_status, &retry_cache, -1, &retry_engine);
+					}, &retry_status, &retry_cache, -1, &retry_engine, is_anchor_mode);
 				if (retry_ok && retry_status == kMatchOk) {
 					ok = true;
 					status = retry_status;
