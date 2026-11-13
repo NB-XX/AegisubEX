@@ -254,9 +254,7 @@ bool MatchLineNativePixel(agi::Context *c, AssDialogue *line, PixelRegion region
 			if (similarity(f) >= minimum_similarity) ++hits;
 		if (hits >= 3) {
 			int seam_ms = c->videoController->TimeAtFrame(seam);
-			int dur_ms = std::max(1000, static_cast<int>(line->End) - static_cast<int>(line->Start));
 			left_limit = std::clamp(c->videoController->FrameAtTime(std::max(0, seam_ms - 300), agi::vfr::START), 0, reference_frame);
-			right_limit = std::clamp(c->videoController->FrameAtTime(std::min(video_end, seam_ms + dur_ms + 1200), agi::vfr::END), reference_frame, frame_count - 1);
 		}
 	}
 
@@ -327,29 +325,64 @@ bool MatchLineNativePixel(agi::Context *c, AssDialogue *line, PixelRegion region
 		if (!matches(candidate)) {
 			// The start lies between this mismatch and the last known match
 			// at most a coarse step later. Walk that gap forward one frame at
-			// a time: consecutive frames decode in order without re-seeking,
-			// while binary probing would jump back and forth inside the gap
-			// and pay a fresh keyframe seek per probe.
+			// a time: consecutive frames decode in order without re-seeking.
 			int b = candidate + 1;
-			while (b < near_match && !cancelled && !matches(b)) ++b;
-			if (cancelled) break;
-			// The loop stops at the first matching frame, or at near_match,
-			// which is known to match.
-			first_match = b;
-			found_start = true;
+			while (b < near_match && !cancelled) {
+				if (matches(b)) {
+					// 确认真实起始帧：抗瞬态杂讯判定
+					if (b + 1 >= near_match || matches(b + 1)) {
+						first_match = b;
+						found_start = true;
+						break;
+					}
+				}
+				++b;
+			}
+			if (!found_start && !cancelled) {
+				first_match = near_match;
+				found_start = true;
+			}
 			break;
 		}
 		near_match = candidate;
 	}
+	if (!found_start && !cancelled) {
+		// 粗扫步长到达或跨越 left_limit 仍全匹配：逐帧逆推回溯，保证起始帧边界完全覆盖
+		int first = near_match;
+		for (int f = near_match - 1; f >= left_limit && !cancelled; --f) {
+			if (!matches(f)) {
+				if (f - 1 >= left_limit && matches(f - 1)) {
+					first = f - 1;
+					--f;
+					continue;
+				}
+				first = f + 1;
+				found_start = true;
+				break;
+			}
+			first = f;
+		}
+		first_match = first;
+		found_start = true;
+	}
 	if (cancelled) { set_status(kMatchCancelled); return false; }
+
 	near_match = reference_frame;
 	for (int candidate = reference_frame + coarse_step; candidate <= right_limit && !cancelled; candidate += coarse_step) {
 		if (!matches(candidate)) {
-			// Same forward walk as the left side: stop at the first mismatch
-			// after the last known match, one frame at a time.
+			// 在已知匹配的 near_match 与首次失配的 candidate 之间，以单帧精度向前推进
 			int last = near_match;
 			for (int f = near_match + 1; f < candidate && !cancelled; ++f) {
-				if (!matches(f)) break;
+				if (!matches(f)) {
+					// 抗压缩噪点与瞬态杂讯：如果仅当前帧跌破阈值，但下一帧依然匹配，说明属于视频压缩/微幅交织杂讯
+					if (f + 1 < candidate && matches(f + 1)) {
+						last = f + 1;
+						++f;
+						continue;
+					}
+					// 连续两帧不匹配或到达 candidate：确认字幕真正结束
+					break;
+				}
 				last = f;
 			}
 			if (cancelled) break;
@@ -358,6 +391,24 @@ bool MatchLineNativePixel(agi::Context *c, AssDialogue *line, PixelRegion region
 			break;
 		}
 		near_match = candidate;
+	}
+	if (!found_end && !cancelled) {
+		// 跨步未能碰到不匹配（如字幕持续到右边界附近或粗扫跨步超出边界）：
+		// 从 near_match + 1 逐帧扫描到 right_limit，确保结尾帧绝不漏判与提前截断
+		int last = near_match;
+		for (int f = near_match + 1; f <= right_limit && !cancelled; ++f) {
+			if (!matches(f)) {
+				if (f + 1 <= right_limit && matches(f + 1)) {
+					last = f + 1;
+					++f;
+					continue;
+				}
+				break;
+			}
+			last = f;
+		}
+		last_match = last;
+		found_end = true;
 	}
 	if (cancelled) { set_status(kMatchCancelled); return false; }
 	new_start = found_start ? c->videoController->TimeAtFrame(first_match, agi::vfr::START) : static_cast<int>(line->Start);
@@ -421,15 +472,38 @@ bool MatchLineDBNetNeural(agi::Context *c, AssDialogue *line, PixelRegion region
 			crop_y0 = dyn_y0;
 			crop_x1 = dyn_x1;
 			crop_y1 = dyn_y1;
+		} else {
+			// 若锚点拓展失败，尝试在当前框内提取文字外接矩形
+			int tight_x0 = 0, tight_y0 = 0, tight_x1 = 0, tight_y1 = 0;
+			if (DBNetDetector::Get().GetTextBoundingBox(
+				ref_f->data.data(), ref_f->width, ref_f->height, ref_f->pitch, ref_f->flipped,
+				s_x0, s_y0, s_x1, s_y1,
+				tight_x0, tight_y0, tight_x1, tight_y1)) {
+				crop_x0 = tight_x0;
+				crop_y0 = tight_y0;
+				crop_x1 = tight_x1;
+				crop_y1 = tight_y1;
+			}
 		}
 	} else {
-		// 用户明确画框模式：采用用户所框矩形，增加边缘内边距以保证字形轮廓完整进入神经网络
-		int pad_y = std::clamp((s_y1 - s_y0) / 10, 1, 3);
-		int pad_x = std::clamp((s_x1 - s_x0) / 30, 1, 4);
-		crop_x0 = std::clamp(s_x0 - pad_x, 0, ref_f->width - 1);
-		crop_x1 = std::clamp(s_x1 + pad_x, 0, ref_f->width);
-		crop_y0 = std::clamp(s_y0 - pad_y, 0, ref_f->height - 1);
-		crop_y1 = std::clamp(s_y1 + pad_y, 0, ref_f->height);
+		// 用户明确画框模式：优先在所选框内提取紧致文字外接矩形，剥离外部背景
+		int tight_x0 = 0, tight_y0 = 0, tight_x1 = 0, tight_y1 = 0;
+		if (DBNetDetector::Get().GetTextBoundingBox(
+			ref_f->data.data(), ref_f->width, ref_f->height, ref_f->pitch, ref_f->flipped,
+			s_x0, s_y0, s_x1, s_y1,
+			tight_x0, tight_y0, tight_x1, tight_y1)) {
+			crop_x0 = tight_x0;
+			crop_y0 = tight_y0;
+			crop_x1 = tight_x1;
+			crop_y1 = tight_y1;
+		} else {
+			int pad_y = std::clamp((s_y1 - s_y0) / 10, 1, 3);
+			int pad_x = std::clamp((s_x1 - s_x0) / 30, 1, 4);
+			crop_x0 = std::clamp(s_x0 - pad_x, 0, ref_f->width - 1);
+			crop_x1 = std::clamp(s_x1 + pad_x, 0, ref_f->width);
+			crop_y0 = std::clamp(s_y0 - pad_y, 0, ref_f->height - 1);
+			crop_y1 = std::clamp(s_y1 + pad_y, 0, ref_f->height);
+		}
 	}
 
 	// 提取基准帧的文字笔画概率图与边缘梯度能量
@@ -552,10 +626,6 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 	// stricter similarity and search bounds that stop at the neighbour, and
 	// finally clamp whatever is left so consecutive lines only touch.
 	constexpr int neighbour_tol = 0; // ms of slack while re-running (strict boundaries, no overlap)
-	// One shared frame decode cache for the whole batch: rows sit seconds
-	// apart, so after the first couple of rows every sample window is already
-	// decoded, and the conflict re-runs cost almost no new frames at all.
-	MaskCache frame_cache;
 
 	std::vector<AssDialogue *> order;
 	for (auto& event : context->ass->Events)
@@ -568,10 +638,52 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 	}
 	auto orig = [&](size_t i) { return std::pair<int, int>{ static_cast<int>(order[i]->Start), static_cast<int>(order[i]->End) }; };
 	auto moved = [&](size_t i) { return cur[i] != orig(i); };
-	auto ref_frame = [&](AssDialogue *line) {
-		int midpoint = static_cast<int>(line->Start + (line->End - line->Start) / 2);
-		return std::clamp(context->videoController->FrameAtTime(midpoint, agi::vfr::START), 0, frame_count - 1);
+
+	// 核心：智能多点探测基准帧，杜绝盲目中点导致的空帧/断句/闪烁误判
+	auto find_best_ref_frame = [&](AssDialogue *line) -> int {
+		int start_f = std::clamp(context->videoController->FrameAtTime(line->Start, agi::vfr::START), 0, frame_count - 1);
+		int end_f = std::clamp(context->videoController->FrameAtTime(line->End, agi::vfr::END), 0, frame_count - 1);
+		if (end_f <= start_f) return start_f;
+
+		// 候选采样点：优先中点 (0.5)，其次两翼 (0.35, 0.65, 0.20, 0.80)
+		std::vector<double> ratios = { 0.50, 0.35, 0.65, 0.20, 0.80 };
+		int best_frame = start_f + (end_f - start_f) / 2;
+		float best_score = -1.0f;
+
+		if (DBNetDetector::Get().IsAvailable()) {
+			for (double r : ratios) {
+				int cand_f = std::clamp(static_cast<int>(start_f + std::round((end_f - start_f) * r)), 0, frame_count - 1);
+				auto cand_img = provider->GetFrame(cand_f, context->videoController->TimeAtFrame(cand_f), true);
+				if (!cand_img || cand_img->data.empty()) continue;
+
+				double scale_x = (provider->GetWidth() > 0 && cand_img->width > 0) ? (static_cast<double>(cand_img->width) / provider->GetWidth()) : 1.0;
+				double scale_y = (provider->GetHeight() > 0 && cand_img->height > 0) ? (static_cast<double>(cand_img->height) / provider->GetHeight()) : 1.0;
+				int s_x0 = static_cast<int>(std::round(region.x0 * scale_x));
+				int s_y0 = static_cast<int>(std::round(region.y0 * scale_y));
+				int s_x1 = static_cast<int>(std::round(region.x1 * scale_x));
+				int s_y1 = static_cast<int>(std::round(region.y1 * scale_y));
+
+				int anchor_x = (s_x0 + s_x1) / 2;
+				int anchor_y = (s_y0 + s_y1) / 2;
+				int anchor_h = std::max(16, s_y1 - s_y0);
+				int bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+
+				if (DBNetDetector::Get().FindAnchorSubtitleBox(
+					cand_img->data.data(), cand_img->width, cand_img->height, cand_img->pitch, cand_img->flipped,
+					anchor_x, anchor_y, anchor_h, bx0, by0, bx1, by1)) {
+					float score = static_cast<float>(bx1 - bx0);
+					if (score > best_score) {
+						best_score = score;
+						best_frame = cand_f;
+					}
+					if (score >= 60.0f) break; // 已获取足够清晰扎实的文字框，直接锁定基准帧
+				}
+			}
+		}
+
+		return best_frame;
 	};
+
 	// 核心：在每帧采样与行间调用 wxSafeYield，杜绝 Windows 消息阻塞卡死
 	auto on_sample_pump = [&](int /*samples*/) -> bool {
 		wxSafeYield(context->parent, true);
@@ -580,8 +692,11 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 
 	auto try_match = [&](AssDialogue *line, size_t pos, int similarity, int lo, int hi, int hint_frame = -1) {
 		int start = line->Start, end = line->End;
+		// 关键架构隔离：为每行独立创建 line_cache，严禁行间共用掩模缓存造成坐标尺寸错乱与内存越界
+		MaskCache line_cache;
+		int ref = find_best_ref_frame(line);
 		try {
-			if (MatchLineToRegion(context, line, region, ref_frame(line), start, end, similarity, lo, hi, on_sample_pump, nullptr, &frame_cache, hint_frame, nullptr, true))
+			if (MatchLineToRegion(context, line, region, ref, start, end, similarity, lo, hi, on_sample_pump, nullptr, &line_cache, hint_frame, nullptr, true))
 				cur[pos] = { start, end };
 		}
 		catch (...) { }
@@ -666,7 +781,7 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 			if (!progress.Update(static_cast<int>(lines.size()) * (1 + round), round == 1
 				? to_wx("正在重新校验并对齐相邻碰撞行...")
 				: to_wx("正在以更严格阈值二次对齐冲突行..."))) break;
-			int similarity = std::min(95, base_similarity + round * rerun_step);
+			int similarity = std::min(88, base_similarity + round * rerun_step);
 			for (auto& [pos, b] : bounds) {
 				wxSafeYield(context->parent, true);
 				if (progress.WasCancelled()) { aborted = true; break; }
