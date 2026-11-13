@@ -62,7 +62,25 @@ struct LocalStyleState {
 	int s = 0;
 };
 
+enum class LocalStyleTagFamily {
+	UNKNOWN,
+	PRIMARY_COLOR,   // \c, \1c
+	SECONDARY_COLOR, // \2c
+	OUTLINE_COLOR,   // \3c
+	SHADOW_COLOR,    // \4c
+	FONT_SIZE,       // \fs
+	FONT_NAME,       // \fn
+	BOLD,            // \b
+	ITALIC,          // \i
+	UNDERLINE,       // \u
+	STRIKEOUT        // \s
+};
+
+LocalStyleTagFamily GetTagFamily(const std::string &name);
 LocalStyleState AnalyzeLocalStylePreState(agi::Context *c, int sel_start, const AssStyle *&out_style);
+LocalStyleState AnalyzeLocalStyleSelectionState(agi::Context *c, int sel_start, int sel_end, const AssStyle *&out_style, LocalStyleState *out_pre_state = nullptr);
+bool TryExpandAdjacentStyleOverrides(const std::string &text, int &sel_start, int &sel_end, LocalStyleTagFamily specific_family = LocalStyleTagFamily::UNKNOWN);
+std::string MergeLocalStyleTags(const std::string &sel, const std::string &opening_tag, const std::string &closing_tag);
 void ApplyLocalStyleTags(agi::Context *c, int sel_start, int sel_end, const std::string &opening_tag, const std::string &closing_tag);
 
 /// Dialog for adjusting style tags for a selected range of text without affecting surrounding text
@@ -73,6 +91,7 @@ class DialogLocalStyle final : public wxDialog {
 	std::string selected_text;
 	std::string full_text;
 	LocalStyleState pre_state;
+	LocalStyleState sel_state;
 
 	// Controls
 	wxCheckBox *chk_c1 = nullptr;

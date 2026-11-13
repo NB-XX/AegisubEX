@@ -644,16 +644,35 @@ void SubsTextEditCtrl::OnLocalStyleQuick(wxCommandEvent &event) {
 	if (sel_start == sel_end) return;
 	if (sel_start > sel_end) std::swap(sel_start, sel_end);
 
-	const AssStyle *style = nullptr;
-	auto state = AnalyzeLocalStylePreState(context, sel_start, style);
+	AssDialogue *active_line = context->selectionController->GetActiveLine();
+	if (!active_line) return;
+	std::string full_text = active_line->Text.get();
+
 	int id = event.GetId();
+	LocalStyleTagFamily target_fam = LocalStyleTagFamily::UNKNOWN;
+	if (id == EDIT_MENU_LOCAL_STYLE_PRIMARY) target_fam = LocalStyleTagFamily::PRIMARY_COLOR;
+	else if (id == EDIT_MENU_LOCAL_STYLE_OUTLINE) target_fam = LocalStyleTagFamily::OUTLINE_COLOR;
+	else if (id == EDIT_MENU_LOCAL_STYLE_SHADOW) target_fam = LocalStyleTagFamily::SHADOW_COLOR;
+	else if (id == EDIT_MENU_LOCAL_STYLE_SECONDARY) target_fam = LocalStyleTagFamily::SECONDARY_COLOR;
+	else if (id == EDIT_MENU_LOCAL_STYLE_FONT_SIZE) target_fam = LocalStyleTagFamily::FONT_SIZE;
+	else if (id == EDIT_MENU_LOCAL_STYLE_FONT_NAME) target_fam = LocalStyleTagFamily::FONT_NAME;
+	else if (id == EDIT_MENU_LOCAL_STYLE_BOLD) target_fam = LocalStyleTagFamily::BOLD;
+	else if (id == EDIT_MENU_LOCAL_STYLE_ITALIC) target_fam = LocalStyleTagFamily::ITALIC;
+	else if (id == EDIT_MENU_LOCAL_STYLE_UNDERLINE) target_fam = LocalStyleTagFamily::UNDERLINE;
+	else if (id == EDIT_MENU_LOCAL_STYLE_STRIKEOUT) target_fam = LocalStyleTagFamily::STRIKEOUT;
+
+	TryExpandAdjacentStyleOverrides(full_text, sel_start, sel_end, target_fam);
+
+	const AssStyle *style = nullptr;
+	LocalStyleState pre_state;
+	auto state = AnalyzeLocalStyleSelectionState(context, sel_start, sel_end, style, &pre_state);
 
 	if (id == EDIT_MENU_LOCAL_STYLE_PRIMARY) {
 		agi::Color initial = state.has_c1 ? state.c1 : style->primary;
 		agi::Color chosen = initial;
 		if (GetColorFromUser(this, initial, false, [&](agi::Color col) { chosen = col; })) {
 			std::string open = "{\\c" + chosen.GetAssOverrideFormatted() + "}";
-			std::string close = state.has_c1 ? "{\\c" + state.c1.GetAssOverrideFormatted() + "}" : "{\\c}";
+			std::string close = pre_state.has_c1 ? "{\\c" + pre_state.c1.GetAssOverrideFormatted() + "}" : "{\\c}";
 			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
 		}
 	}
@@ -662,7 +681,7 @@ void SubsTextEditCtrl::OnLocalStyleQuick(wxCommandEvent &event) {
 		agi::Color chosen = initial;
 		if (GetColorFromUser(this, initial, false, [&](agi::Color col) { chosen = col; })) {
 			std::string open = "{\\3c" + chosen.GetAssOverrideFormatted() + "}";
-			std::string close = state.has_c3 ? "{\\3c" + state.c3.GetAssOverrideFormatted() + "}" : "{\\3c}";
+			std::string close = pre_state.has_c3 ? "{\\3c" + pre_state.c3.GetAssOverrideFormatted() + "}" : "{\\3c}";
 			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
 		}
 	}
@@ -671,7 +690,7 @@ void SubsTextEditCtrl::OnLocalStyleQuick(wxCommandEvent &event) {
 		agi::Color chosen = initial;
 		if (GetColorFromUser(this, initial, false, [&](agi::Color col) { chosen = col; })) {
 			std::string open = "{\\4c" + chosen.GetAssOverrideFormatted() + "}";
-			std::string close = state.has_c4 ? "{\\4c" + state.c4.GetAssOverrideFormatted() + "}" : "{\\4c}";
+			std::string close = pre_state.has_c4 ? "{\\4c" + pre_state.c4.GetAssOverrideFormatted() + "}" : "{\\4c}";
 			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
 		}
 	}
@@ -680,7 +699,7 @@ void SubsTextEditCtrl::OnLocalStyleQuick(wxCommandEvent &event) {
 		agi::Color chosen = initial;
 		if (GetColorFromUser(this, initial, false, [&](agi::Color col) { chosen = col; })) {
 			std::string open = "{\\2c" + chosen.GetAssOverrideFormatted() + "}";
-			std::string close = state.has_c2 ? "{\\2c" + state.c2.GetAssOverrideFormatted() + "}" : "{\\2c}";
+			std::string close = pre_state.has_c2 ? "{\\2c" + pre_state.c2.GetAssOverrideFormatted() + "}" : "{\\2c}";
 			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
 		}
 	}
@@ -689,7 +708,7 @@ void SubsTextEditCtrl::OnLocalStyleQuick(wxCommandEvent &event) {
 		long new_fs = wxGetNumberFromUser(to_wx("请输入字号大小 (1 - 1000)："), to_wx("字号:"), to_wx("局部字号变更"), init_fs, 1, 1000, this);
 		if (new_fs > 0) {
 			std::string open = "{\\fs" + std::to_string(new_fs) + "}";
-			std::string close = state.has_fs ? "{\\fs" + std::to_string(state.fs) + "}" : "{\\fs}";
+			std::string close = pre_state.has_fs ? "{\\fs" + std::to_string(pre_state.fs) + "}" : "{\\fs}";
 			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
 		}
 	}
@@ -698,7 +717,7 @@ void SubsTextEditCtrl::OnLocalStyleQuick(wxCommandEvent &event) {
 		wxFont font = wxGetFontFromUser(this, init_font);
 		if (font.IsOk()) {
 			std::string open = "{\\fn" + from_wx(font.GetFaceName()) + "}";
-			std::string close = state.has_fn ? "{\\fn" + state.fn + "}" : "{\\fn}";
+			std::string close = pre_state.has_fn ? "{\\fn" + pre_state.fn + "}" : "{\\fn}";
 			ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
 		}
 	}
@@ -706,28 +725,28 @@ void SubsTextEditCtrl::OnLocalStyleQuick(wxCommandEvent &event) {
 		int cur_b = state.has_b ? state.b : (style->bold ? 1 : 0);
 		int new_b = (cur_b == 0 ? 1 : 0);
 		std::string open = "{\\b" + std::to_string(new_b) + "}";
-		std::string close = state.has_b ? "{\\b" + std::to_string(state.b) + "}" : "{\\b}";
+		std::string close = pre_state.has_b ? "{\\b" + std::to_string(pre_state.b) + "}" : "{\\b}";
 		ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
 	}
 	else if (id == EDIT_MENU_LOCAL_STYLE_ITALIC) {
 		int cur_i = state.has_i ? state.i : (style->italic ? 1 : 0);
 		int new_i = (cur_i == 0 ? 1 : 0);
 		std::string open = "{\\i" + std::to_string(new_i) + "}";
-		std::string close = state.has_i ? "{\\i" + std::to_string(state.i) + "}" : "{\\i}";
+		std::string close = pre_state.has_i ? "{\\i" + std::to_string(pre_state.i) + "}" : "{\\i}";
 		ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
 	}
 	else if (id == EDIT_MENU_LOCAL_STYLE_UNDERLINE) {
 		int cur_u = state.has_u ? state.u : (style->underline ? 1 : 0);
 		int new_u = (cur_u == 0 ? 1 : 0);
 		std::string open = "{\\u" + std::to_string(new_u) + "}";
-		std::string close = state.has_u ? "{\\u" + std::to_string(state.u) + "}" : "{\\u}";
+		std::string close = pre_state.has_u ? "{\\u" + std::to_string(pre_state.u) + "}" : "{\\u}";
 		ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
 	}
 	else if (id == EDIT_MENU_LOCAL_STYLE_STRIKEOUT) {
 		int cur_s = state.has_s ? state.s : (style->strikeout ? 1 : 0);
 		int new_s = (cur_s == 0 ? 1 : 0);
 		std::string open = "{\\s" + std::to_string(new_s) + "}";
-		std::string close = state.has_s ? "{\\s" + std::to_string(state.s) + "}" : "{\\s}";
+		std::string close = pre_state.has_s ? "{\\s" + std::to_string(pre_state.s) + "}" : "{\\s}";
 		ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
 	}
 }
