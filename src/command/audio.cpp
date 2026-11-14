@@ -50,6 +50,7 @@
 
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/io.h>
+#include "../silero_vad.h"
 
 namespace {
 	using cmd::Command;
@@ -554,10 +555,26 @@ struct audio_karaoke final : public Command {
 	}
 };
 
+struct audio_vad_align_selection final : public Command {
+	CMD_NAME("audio/vad_align_selection")
+	CMD_TYPE(COMMAND_VALIDATE)
+	wxString StrMenu(const agi::Context *) const override { return to_wx("AI 语音自动对轴与长句拆分 (VAD)..."); }
+	wxString StrDisplay(const agi::Context *) const override { return to_wx("语音对轴(VAD)"); }
+	wxString StrHelp() const override { return to_wx("使用本地 Silero VAD 模型在 1.5s 范围内自动掐准人声起止时刻，并对超长字幕进行智能断句拆分"); }
+
+	bool Validate(const agi::Context *c) override {
+		return c->project->AudioProvider() && !c->selectionController->GetSelectedSet().empty();
+	}
+	void operator()(agi::Context *c) override {
+		CalibrateAndSplitLinesWithVAD(c, 1500, true);
+	}
+};
+
 }
 
 namespace cmd {
 	void init_audio() {
+		reg(std::make_unique<audio_vad_align_selection>());
 		reg(std::make_unique<audio_autocommit>());
 		reg(std::make_unique<audio_autonext>());
 		reg(std::make_unique<audio_autoscroll>());

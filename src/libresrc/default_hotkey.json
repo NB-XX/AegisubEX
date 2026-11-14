@@ -360,6 +360,9 @@
 		],
 		"video/tool/vector_clip" : [
 			"J"
+		],
+		"video/tool/frame_match_current" : [
+			"Ctrl-Alt-d"
 		]
 	}
 }

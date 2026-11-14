@@ -40,6 +40,11 @@ ColourButton::ColourButton(wxWindow *parent, wxSize const& size, bool alpha, agi
 	});
 }
 
+void ColourButton::SetColor(agi::Color col) {
+	colour = std::move(col);
+	UpdateBitmap();
+}
+
 void ColourButton::UpdateBitmap() {
 	using namespace boost::gil;
 	fill_pixels(interleaved_view(bmp.GetWidth(), bmp.GetHeight(),

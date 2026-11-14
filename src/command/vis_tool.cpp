@@ -148,6 +148,20 @@ namespace {
 		void operator()(agi::Context *c) override { VisualToolTimingRegion::BatchMatchSelection(c); }
 	};
 
+	struct frame_match_current final : public Command {
+		CMD_NAME("video/tool/frame_match_current")
+		CMD_ICON(frame_match)
+		CMD_TYPE(COMMAND_VALIDATE)
+		wxString StrMenu(const agi::Context *) const override { return to_wx("单键快速对帧\tCtrl+Alt+D"); }
+		wxString StrDisplay(const agi::Context *) const override { return to_wx("快速对帧"); }
+		wxString StrHelp() const override { return to_wx("使用预设字幕区域与当前画面对当前行执行快速对帧 (Ctrl+Alt+D)"); }
+
+		bool Validate(const agi::Context *c) override {
+			return c->project->VideoProvider() && c->selectionController->GetActiveLine();
+		}
+		void operator()(agi::Context *c) override { VisualToolTimingRegion::MatchCurrentLine(c); }
+	};
+
 	struct visual_mode_motion_track final : public visual_tool_command<VisualToolMotionTrack> {
 		CMD_NAME("video/tool/motion_track")
 		wxString StrMenu(const agi::Context *) const override { return to_wx("运动追踪选框"); }
@@ -260,6 +274,7 @@ namespace cmd {
 		reg(std::make_unique<visual_mode_clip>());
 		reg(std::make_unique<visual_mode_timing_region>());
 		reg(std::make_unique<batch_frame_match>());
+		reg(std::make_unique<frame_match_current>());
 		reg(std::make_unique<visual_mode_motion_track>());
 		reg(std::make_unique<visual_mode_vector_clip>());
 

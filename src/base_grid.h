@@ -155,8 +155,10 @@ public:
 	void ClearFilter();
 	bool HasActiveFilter() const { return review_mode && filter_active && !filter_query.empty(); }
 	int GetTotalEventsCount() const;
+	void ShowHeaderFilterMenu(int col_idx, const wxPoint& pos);
 
 	agi::signal::Signal<int, int> FilterCountsChanged;
+	agi::signal::Signal<int, const wxString&> FilterChanged;
 
 	DECLARE_EVENT_TABLE()
 };
@@ -175,6 +177,7 @@ class ReviewFilterBar final : public wxPanel {
 	wxStaticText *count_label = nullptr;
 	wxButton *clear_btn = nullptr;
 	agi::signal::Connection filter_conn;
+	agi::signal::Connection filter_change_conn;
 	agi::signal::Connection review_conn;
 
 	void UpdateCountLabel(int displayed, int total);

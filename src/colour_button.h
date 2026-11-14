@@ -45,6 +45,9 @@ public:
 
 	/// Get the currently selected color
 	agi::Color GetColor() { return colour; }
+
+	/// Set the currently selected color
+	void SetColor(agi::Color col);
 };
 
 struct ColorValidator final : public wxValidator {

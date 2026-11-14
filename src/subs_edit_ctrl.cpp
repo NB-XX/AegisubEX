@@ -35,6 +35,8 @@
 #include <wx/fontdlg.h>
 
 #include "ass_dialogue.h"
+#include "ass_file.h"
+#include "video_controller.h"
 #include "command/command.h"
 #include "compat.h"
 #include "format.h"
@@ -58,6 +60,8 @@
 #include <wx/clipbrd.h>
 #include <wx/intl.h>
 #include <wx/menu.h>
+#include <wx/popupwin.h>
+#include <wx/settings.h>
 #include <wx/settings.h>
 
 // Maximum number of languages (locales)
@@ -78,6 +82,7 @@ enum {
 	EDIT_MENU_LOCAL_STYLE_ITALIC,
 	EDIT_MENU_LOCAL_STYLE_UNDERLINE,
 	EDIT_MENU_LOCAL_STYLE_STRIKEOUT,
+	EDIT_MENU_LOCAL_STYLE_CLEAR,
 	EDIT_MENU_LOCAL_STYLE_DIALOG,
 	EDIT_MENU_SPLIT_PRESERVE = (wxID_HIGHEST + 1) + 4000,
 	EDIT_MENU_SPLIT_ESTIMATE,
@@ -96,6 +101,45 @@ enum {
 	EDIT_MENU_DIC_LANGS,
 	EDIT_MENU_THES_LANGUAGE = EDIT_MENU_DIC_LANGUAGE + LANGS_MAX,
 	EDIT_MENU_THES_LANGS
+};
+
+class FloatingFormatBar final : public wxPopupTransientWindow {
+	SubsTextEditCtrl *editor;
+public:
+	FloatingFormatBar(SubsTextEditCtrl *parent, agi::Context *context)
+	: wxPopupTransientWindow(parent, wxBORDER_SIMPLE)
+	, editor(parent)
+	{
+		SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
+		auto sizer = new wxBoxSizer(wxHORIZONTAL);
+
+		auto make_btn = [&](const wxString& label, const wxString& tip, int cmd_id) {
+			auto btn = new wxButton(this, cmd_id, label, wxDefaultPosition, wxSize(32, 24), wxBU_EXACTFIT);
+			btn->SetToolTip(tip);
+			btn->Bind(wxEVT_BUTTON, [this, cmd_id](wxCommandEvent &evt) {
+				if (editor) {
+					if (cmd_id == EDIT_MENU_LOCAL_STYLE_DIALOG) {
+						editor->OnLocalStyleChange(evt);
+					} else {
+						editor->OnLocalStyleQuick(evt);
+					}
+				}
+				Dismiss();
+			});
+			sizer->Add(btn, 0, wxALL | wxALIGN_CENTER_VERTICAL, 1);
+			return btn;
+		};
+
+		make_btn(to_wx("B"), to_wx("加粗"), EDIT_MENU_LOCAL_STYLE_BOLD);
+		make_btn(to_wx("I"), to_wx("倾斜"), EDIT_MENU_LOCAL_STYLE_ITALIC);
+		make_btn(to_wx("U"), to_wx("下划线"), EDIT_MENU_LOCAL_STYLE_UNDERLINE);
+		make_btn(to_wx("字色"), to_wx("文字颜色 (Primary)"), EDIT_MENU_LOCAL_STYLE_PRIMARY);
+		make_btn(to_wx("边色"), to_wx("边框颜色 (Outline)"), EDIT_MENU_LOCAL_STYLE_OUTLINE);
+		make_btn(to_wx("重置"), to_wx("清除选中区域样式代码"), EDIT_MENU_LOCAL_STYLE_CLEAR);
+		make_btn(to_wx("更多..."), to_wx("打开局部样式详细面板..."), EDIT_MENU_LOCAL_STYLE_DIALOG);
+
+		SetSizerAndFit(sizer);
+	}
 };
 
 SubsTextEditCtrl::SubsTextEditCtrl(wxWindow* parent, wxSize wsize, long style, agi::Context *context)
@@ -140,13 +184,15 @@ SubsTextEditCtrl::SubsTextEditCtrl(wxWindow* parent, wxSize wsize, long style, a
 		Bind(wxEVT_MENU, bind(&cmd::call, "edit/line/split/video", context), EDIT_MENU_SPLIT_VIDEO);
 	}
 
-	for (int id = EDIT_MENU_LOCAL_STYLE_PRIMARY; id <= EDIT_MENU_LOCAL_STYLE_STRIKEOUT; ++id) {
+	for (int id = EDIT_MENU_LOCAL_STYLE_PRIMARY; id <= EDIT_MENU_LOCAL_STYLE_CLEAR; ++id) {
 		Bind(wxEVT_MENU, &SubsTextEditCtrl::OnLocalStyleQuick, this, id);
 	}
 	Bind(wxEVT_MENU, &SubsTextEditCtrl::OnLocalStyleChange, this, EDIT_MENU_LOCAL_STYLE_DIALOG);
 	Bind(wxEVT_CONTEXT_MENU, &SubsTextEditCtrl::OnContextMenu, this);
 	Bind(wxEVT_IDLE, std::bind(&SubsTextEditCtrl::UpdateCallTip, this));
 	Bind(wxEVT_STC_DOUBLECLICK, &SubsTextEditCtrl::OnDoubleClick, this);
+	Bind(wxEVT_LEFT_UP, [this](wxMouseEvent& e) { e.Skip(); CheckShowFloatingFormatBar(); });
+	Bind(wxEVT_KEY_UP, [this](wxKeyEvent& e) { e.Skip(); CheckShowFloatingFormatBar(); });
 	Bind(wxEVT_STC_STYLENEEDED, [this](wxStyledTextEvent&) {
 		{
 			std::string text = GetTextRaw().data();
@@ -210,8 +256,32 @@ BEGIN_EVENT_TABLE(SubsTextEditCtrl,wxStyledTextCtrl)
 END_EVENT_TABLE()
 
 void SubsTextEditCtrl::OnLoseFocus(wxFocusEvent &event) {
+	if (floating_bar && floating_bar->IsShown()) floating_bar->Dismiss();
 	CallTipCancel();
 	event.Skip();
+}
+
+void SubsTextEditCtrl::CheckShowFloatingFormatBar() {
+	if (!context || !context->videoController || !context->videoController->IsReviewMode()) {
+		if (floating_bar && floating_bar->IsShown()) floating_bar->Dismiss();
+		return;
+	}
+
+	int s0 = GetSelectionStart();
+	int s1 = GetSelectionEnd();
+	if (s0 >= s1) {
+		if (floating_bar && floating_bar->IsShown()) floating_bar->Dismiss();
+		return;
+	}
+
+	wxPoint pt = PointFromPosition(s1);
+	wxPoint screen_pt = ClientToScreen(wxPoint(pt.x, std::max(0, pt.y - 30)));
+
+	if (!floating_bar) {
+		floating_bar = std::make_unique<FloatingFormatBar>(this, context);
+	}
+	floating_bar->Position(screen_pt, wxSize(0, 0));
+	floating_bar->Popup();
 }
 
 void SubsTextEditCtrl::OnKeyDown(wxKeyEvent &event) {
@@ -748,6 +818,20 @@ void SubsTextEditCtrl::OnLocalStyleQuick(wxCommandEvent &event) {
 		std::string open = "{\\s" + std::to_string(new_s) + "}";
 		std::string close = pre_state.has_s ? "{\\s" + std::to_string(pre_state.s) + "}" : "{\\s}";
 		ApplyLocalStyleTags(context, sel_start, sel_end, open, close);
+	}
+	else if (id == EDIT_MENU_LOCAL_STYLE_CLEAR) {
+		std::string sel = full_text.substr(sel_start, sel_end - sel_start);
+		std::string cleaned;
+		bool in_tag = false;
+		for (char ch : sel) {
+			if (ch == '{') in_tag = true;
+			else if (ch == '}') in_tag = false;
+			else if (!in_tag) cleaned += ch;
+		}
+		std::string new_full = full_text.substr(0, sel_start) + cleaned + full_text.substr(sel_end);
+		active_line->Text = new_full;
+		context->ass->Commit(_("clear local styles"), AssFile::COMMIT_DIAG_TEXT);
+		SetSelection(sel_start, sel_start + cleaned.size());
 	}
 }
 

@@ -17,6 +17,7 @@ public:
 	VisualToolTimingRegion(VideoDisplay *parent, agi::Context *context);
 	static bool HasPresetRegion();
 	static void BatchMatchSelection(agi::Context *context);
+	static void MatchCurrentLine(agi::Context *context);
 	void OnMouseEvent(wxMouseEvent &event) override;
 	bool OnKeyDown(wxKeyEvent &event) override;
 	void Draw() override;

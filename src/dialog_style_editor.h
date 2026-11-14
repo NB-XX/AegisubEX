@@ -93,6 +93,7 @@ class DialogStyleEditor final : public wxDialog {
 	wxWindow *EffectsSizerBox = nullptr;
 	std::vector<wxPanel *> stroke_row_panels;
 	wxSpinCtrl *margin[3];
+	wxSpinCtrl *alpha_ctrl[4] = {nullptr};
 	wxRadioBox *Alignment;
 	wxComboBox *OutlineType;
 	wxComboBox *Encoding;

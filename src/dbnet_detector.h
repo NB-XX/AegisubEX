@@ -187,7 +187,21 @@ public:
 		status = ort->CreateSession(env, found_model.c_str(), session_options, &session);
 		if (status) {
 			ort->ReleaseStatus(status);
-			return false;
+			// 如果 DirectML GPU 初始化失败（如驱动不兼容/显存限制），安全降级至 CPU 推理引擎
+			if (is_gpu) {
+				is_gpu = false;
+				ort->ReleaseSessionOptions(session_options);
+				session_options = nullptr;
+				status = ort->CreateSessionOptions(&session_options);
+				if (!status) {
+					ort->SetIntraOpNumThreads(session_options, 2);
+					status = ort->CreateSession(env, found_model.c_str(), session_options, &session);
+				}
+			}
+			if (status) {
+				ort->ReleaseStatus(status);
+				return false;
+			}
 		}
 
 		status = ort->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &memory_info);

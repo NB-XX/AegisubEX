@@ -892,3 +892,219 @@ inline std::vector<VADSegment> RunVADPipeline(
 	if (on_progress) on_progress(1.0f, "人声切分与说话人识别完成");
 	return segments;
 }
+
+// --------------------------------------------------------------------------
+// 4. 选中字幕行 VAD 自动对轴校准与超长字幕智能拆分 (VAD Line Calibration & Smart Splitting)
+// --------------------------------------------------------------------------
+#include <wx/progdlg.h>
+#include <wx/msgdlg.h>
+#include "include/aegisub/context.h"
+#include "ass_file.h"
+#include "ass_dialogue.h"
+#include "selection_controller.h"
+#include "frame_main.h"
+
+struct VADLineCalibrationResult {
+	int modified_count = 0;
+	int split_count = 0;
+};
+
+inline VADLineCalibrationResult CalibrateAndSplitLinesWithVAD(agi::Context* context, int search_pad_ms = 1500, bool allow_smart_split = true) {
+	VADLineCalibrationResult res;
+	if (!context || !context->project->AudioProvider()) {
+		if (context && context->parent) {
+			wxMessageBox(to_wx("请先加载音频文件或打开附带音频的视频文件。"), to_wx("AI 语音自动对轴 (VAD)"), wxOK | wxICON_WARNING, context->parent);
+		}
+		return res;
+	}
+
+	auto provider = context->project->AudioProvider();
+	auto selected_set = context->selectionController->GetSelectedSet();
+	if (selected_set.empty()) {
+		auto active = context->selectionController->GetActiveLine();
+		if (active) selected_set.insert(active);
+	}
+	if (selected_set.empty()) {
+		wxMessageBox(to_wx("请先在字幕表格中选中要校对的字幕行。"), to_wx("AI 语音自动对轴 (VAD)"), wxOK | wxICON_INFORMATION, context->parent);
+		return res;
+	}
+
+	std::vector<AssDialogue*> lines(selected_set.begin(), selected_set.end());
+	std::sort(lines.begin(), lines.end(), [](AssDialogue const* a, AssDialogue const* b) {
+		if (a->Start != b->Start) return a->Start < b->Start;
+		return a->Row < b->Row;
+	});
+
+	wxProgressDialog progress(
+		to_wx("AI 语音自动对轴与智能断句"),
+		to_wx("正在使用 Silero VAD 提取人声波形与语音端点..."),
+		static_cast<int>(lines.size()), context->parent,
+		wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_CAN_ABORT | wxPD_ELAPSED_TIME);
+
+	VADConfig cfg;
+	cfg.threshold = 0.50f;
+	cfg.neg_threshold = 0.35f;
+	cfg.min_speech_ms = 160;
+	cfg.min_silence_ms = 220; // 220ms 静音视为断句停顿
+	cfg.pad_start_ms = 30;    // 人声起始微前移 30ms，保证音节头完整
+	cfg.pad_end_ms = 120;     // 人声结尾后置 120ms，保证尾音不吞音
+	cfg.filter_sfx = false;   // 对白优先，避免误杀轻声细语
+	cfg.mode = VADConfig::MODE_SEGMENT_ONLY;
+
+	int commit_id = -1;
+
+	for (size_t idx = 0; idx < lines.size(); ++idx) {
+		if (!progress.Update(static_cast<int>(idx), wxString::Format(to_wx("正在使用 VAD 分析第 %d / %d 行..."), static_cast<int>(idx + 1), static_cast<int>(lines.size())))) {
+			break;
+		}
+
+		AssDialogue* line = lines[idx];
+		int64_t search_s0 = std::max<int64_t>(0, static_cast<int64_t>(line->Start) - search_pad_ms);
+		int64_t search_s1 = static_cast<int64_t>(line->End) + search_pad_ms;
+
+		auto segs = RunVADPipeline(provider, search_s0, search_s1, cfg, {}, nullptr, nullptr, nullptr);
+		if (segs.empty()) continue;
+
+		// 筛选与原字幕区间重叠或紧邻的人声片段
+		std::vector<VADSegment> matched_segs;
+		for (const auto& s : segs) {
+			int64_t overlap_start = std::max<int64_t>(s.start_ms, static_cast<int64_t>(line->Start) - 400);
+			int64_t overlap_end = std::min<int64_t>(s.end_ms, static_cast<int64_t>(line->End) + 400);
+			if (overlap_end > overlap_start || (std::abs(s.start_ms - line->Start) < 600) || (std::abs(s.end_ms - line->End) < 600)) {
+				matched_segs.push_back(s);
+			}
+		}
+
+		if (matched_segs.empty()) {
+			// 若原轴误差极大未能与 [Start, End] 重叠，选择距离原中点最近的人声片段
+			int64_t mid_time = (line->Start + line->End) / 2;
+			int64_t min_dist = 99999999;
+			size_t best_idx = 0;
+			for (size_t i = 0; i < segs.size(); ++i) {
+				int64_t seg_mid = (segs[i].start_ms + segs[i].end_ms) / 2;
+				int64_t dist = std::abs(seg_mid - mid_time);
+				if (dist < min_dist) {
+					min_dist = dist;
+					best_idx = i;
+				}
+			}
+			matched_segs.push_back(segs[best_idx]);
+		}
+
+		std::string text = line->Text.get();
+		std::string stripped = line->GetStrippedText();
+
+		// 判断是否触发超长字幕智能拆分：
+		// 条件：检测到至少 2 段明显分离的人声停顿（间隔 >= 220ms），且文本字数较长（>= 12 字符或原时长 >= 3s）
+		bool did_split = false;
+		if (allow_smart_split && matched_segs.size() >= 2 && (stripped.size() >= 12 || (line->End - line->Start) >= 3000)) {
+			int64_t max_gap = 0;
+			size_t split_seg_idx = 0;
+			for (size_t i = 0; i + 1 < matched_segs.size(); ++i) {
+				int64_t gap = matched_segs[i + 1].start_ms - matched_segs[i].end_ms;
+				if (gap > max_gap) {
+					max_gap = gap;
+					split_seg_idx = i;
+				}
+			}
+
+			if (max_gap >= 220) {
+				int64_t dur1 = matched_segs[split_seg_idx].end_ms - matched_segs.front().start_ms;
+				int64_t dur2 = matched_segs.back().end_ms - matched_segs[split_seg_idx + 1].start_ms;
+				double target_ratio = static_cast<double>(dur1) / std::max<int64_t>(1, dur1 + dur2);
+
+				int best_split_pos = -1;
+				int best_score = -999999;
+
+				const std::vector<std::string> puncts = { "，", "。", "！", "？", "；", "：", "、", ",", ".", "!", "?", ";", ":", "\\N" };
+
+				for (size_t p = 0; p < text.size(); ++p) {
+					int punct_priority = 0;
+					int advance = 0;
+
+					for (const auto& pat : puncts) {
+						if (text.compare(p, pat.size(), pat) == 0) {
+							punct_priority = (pat == "\\N") ? 50 : 30;
+							advance = static_cast<int>(pat.size());
+							break;
+						}
+					}
+					if (punct_priority == 0 && text[p] == ' ') {
+						punct_priority = 15;
+						advance = 1;
+					}
+
+					if (punct_priority > 0) {
+						double cur_ratio = static_cast<double>(p) / std::max<size_t>(1, text.size());
+						double diff = std::abs(cur_ratio - target_ratio);
+						int score = static_cast<int>(punct_priority - diff * 40.0);
+						if (score > best_score) {
+							best_score = score;
+							best_split_pos = static_cast<int>(p + advance);
+						}
+					}
+				}
+
+				if (best_split_pos <= 0 || best_split_pos >= static_cast<int>(text.size())) {
+					best_split_pos = static_cast<int>(std::round(text.size() * target_ratio));
+				}
+
+				if (best_split_pos > 0 && best_split_pos < static_cast<int>(text.size())) {
+					std::string part1 = text.substr(0, best_split_pos);
+					std::string part2 = text.substr(best_split_pos);
+					while (!part2.empty() && (part2.front() == ' ' || part2.front() == '\t')) {
+						part2.erase(part2.begin());
+					}
+
+					if (!part1.empty() && !part2.empty()) {
+						int s1_start = static_cast<int>(matched_segs.front().start_ms);
+						int s1_end = static_cast<int>(matched_segs[split_seg_idx].end_ms);
+						int s2_start = static_cast<int>(matched_segs[split_seg_idx + 1].start_ms);
+						int s2_end = static_cast<int>(matched_segs.back().end_ms);
+
+						line->Start = s1_start;
+						line->End = s1_end;
+						line->Text = part1;
+
+						auto new_line = new AssDialogue(*line);
+						new_line->Start = s2_start;
+						new_line->End = s2_end;
+						new_line->Text = part2;
+
+						auto it = std::find_if(context->ass->Events.begin(), context->ass->Events.end(), [&](AssDialogue const& d) {
+							return &d == line;
+						});
+						if (it != context->ass->Events.end()) {
+							context->ass->Events.insert(std::next(it), *new_line);
+						}
+
+						delete new_line;
+						did_split = true;
+						res.split_count++;
+						res.modified_count += 2;
+					}
+				}
+			}
+		}
+
+		if (!did_split) {
+			int new_start = static_cast<int>(matched_segs.front().start_ms);
+			int new_end = static_cast<int>(matched_segs.back().end_ms);
+			if (new_end > new_start) {
+				line->Start = new_start;
+				line->End = new_end;
+				res.modified_count++;
+			}
+		}
+
+		commit_id = context->ass->Commit(_("VAD calibrate subtitle timings"), AssFile::COMMIT_DIAG_TIME, commit_id, line);
+	}
+
+	if (res.modified_count > 0 && context->frame) {
+		context->frame->SetStatusText(wxString::Format(
+			to_wx("VAD 语音对轴完成：已自动校对 %d 行时间轴（智能拆分长句 %d 处）"),
+			res.modified_count, res.split_count));
+	}
+
+	return res;
+}

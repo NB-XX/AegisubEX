@@ -76,6 +76,8 @@
         { "command" : "time/snap/scene" },
         { "command" : "time/frame/current" },
         {},
+        { "command" : "audio/vad_align_selection", "text" : "AI 语音自动对轴与长句拆分 (VAD)..." },
+        {},
         { "submenu" : "main/timing/make times continuous", "text" : "Make Times Continuous" }
     ],
     "main/timing/make times continuous" : [
@@ -88,7 +90,9 @@
         { "recent" : "Video" },
         { "command" : "video/open/dummy" },
         { "command" : "video/details" },
-        { "command" : "video/frame_match_settings", "text" : "对帧匹配设置..." },
+        { "command" : "video/tool/frame_match_current", "text" : "单键快速对帧\tCtrl+Alt+D" },
+        { "command" : "video/tool/frame_match_batch", "text" : "批量视觉对帧" },
+        { "command" : "video/frame_match_settings", "text" : "视觉对帧设置..." },
         { "command" : "video/motion_track", "text" : "运动追踪与相对位移..." },
         { "command" : "video/shuffler", "text" : "按字幕切分/合并视频..." },
         {},
@@ -136,6 +140,7 @@
         { "command" : "audio/open/noise" },
         {},
         { "command" : "ai/vad_diarize" },
+        { "command" : "audio/vad_align_selection", "text" : "AI 语音自动对轴与长句拆分 (VAD)..." },
         { "command" : "ai/audio_translate" }
     ],
     "main/view" : [

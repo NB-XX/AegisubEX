@@ -212,6 +212,12 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 		new ColourButton(ColorsSizerBox, wxSize(55, 16), true, style->outline, ColorValidator(&work->outline)),
 		new ColourButton(ColorsSizerBox, wxSize(55, 16), true, style->shadow, ColorValidator(&work->shadow))
 	};
+	agi::Color *colors[] = { &work->primary, &work->secondary, &work->outline, &work->shadow };
+	for (int i = 0; i < 4; ++i) {
+		alpha_ctrl[i] = new wxSpinCtrl(ColorsSizerBox, -1, std::to_wstring(colors[i]->a),
+		                               wxDefaultPosition, wxSize(55, -1), wxSP_ARROW_KEYS, 0, 255, colors[i]->a);
+		alpha_ctrl[i]->SetToolTip(to_wx("透明度 (0: 完全不透明, 255: 完全透明)"));
+	}
 	for (int i = 0; i < 3; i++)
 		margin[i] = new wxSpinCtrl(MarginSizerBox, -1, std::to_wstring(style->Margin[i]),
 		                           wxDefaultPosition, wxDefaultSize,
@@ -313,9 +319,26 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	ColorsSizer->AddStretchSpacer(1);
 	for (int i = 0; i < 4; ++i) {
 		auto sizer = new wxBoxSizer(wxVERTICAL);
-		sizer->Add(new wxStaticText(ColorsSizerBox, -1, colorLabels[i]), 0, wxBOTTOM | wxALIGN_CENTER, 5);
-		sizer->Add(colorButton[i], 0, wxBOTTOM | wxALIGN_CENTER, 5);
+		sizer->Add(new wxStaticText(ColorsSizerBox, -1, colorLabels[i]), 0, wxBOTTOM | wxALIGN_CENTER, 3);
+		sizer->Add(colorButton[i], 0, wxBOTTOM | wxALIGN_CENTER, 3);
+		sizer->Add(alpha_ctrl[i], 0, wxBOTTOM | wxALIGN_CENTER, 2);
 		ColorsSizer->Add(sizer, 0, wxLEFT, i?5:0);
+
+		colorButton[i]->Bind(EVT_COLOR, [this, i](ValueEvent<agi::Color> &evt) {
+			if (alpha_ctrl[i]) alpha_ctrl[i]->SetValue(evt.Get().a);
+			SubsPreview->SetStyle(*work);
+		});
+
+		alpha_ctrl[i]->Bind(wxEVT_SPINCTRL, [this, i, colorButton, colors](wxCommandEvent &) {
+			colors[i]->a = static_cast<unsigned char>(alpha_ctrl[i]->GetValue());
+			colorButton[i]->SetColor(*colors[i]);
+			SubsPreview->SetStyle(*work);
+		});
+		alpha_ctrl[i]->Bind(wxEVT_TEXT, [this, i, colorButton, colors](wxCommandEvent &) {
+			colors[i]->a = static_cast<unsigned char>(alpha_ctrl[i]->GetValue());
+			colorButton[i]->SetColor(*colors[i]);
+			SubsPreview->SetStyle(*work);
+		});
 	}
 	ColorsSizer->AddStretchSpacer(1);
 
@@ -530,6 +553,11 @@ void DialogStyleEditor::UpdateWorkStyle() {
 	updating = true;
 	TransferDataFromWindow();
 	updating = false;
+
+	if (alpha_ctrl[0]) work->primary.a = static_cast<unsigned char>(alpha_ctrl[0]->GetValue());
+	if (alpha_ctrl[1]) work->secondary.a = static_cast<unsigned char>(alpha_ctrl[1]->GetValue());
+	if (alpha_ctrl[2]) work->outline.a = static_cast<unsigned char>(alpha_ctrl[2]->GetValue());
+	if (alpha_ctrl[3]) work->shadow.a = static_cast<unsigned char>(alpha_ctrl[3]->GetValue());
 
 	work->font = from_wx(FontName->GetValue());
 

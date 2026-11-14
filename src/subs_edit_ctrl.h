@@ -37,6 +37,7 @@
 #include <wx/stc/stc.h>
 
 class Thesaurus;
+class FloatingFormatBar;
 namespace agi {
 	class SpellChecker;
 	struct Context;
@@ -46,6 +47,7 @@ namespace agi {
 /// @class SubsTextEditCtrl
 /// @brief A Scintilla control with spell checking and syntax highlighting
 class SubsTextEditCtrl final : public wxStyledTextCtrl, private agi::signal::ConnectionScope {
+	friend class FloatingFormatBar;
 	/// Backend spellchecker to use
 	std::unique_ptr<agi::SpellChecker> spellchecker;
 
@@ -113,6 +115,9 @@ class SubsTextEditCtrl final : public wxStyledTextCtrl, private agi::signal::Con
 	/// @param base_id ID to use for the first menu item
 	/// @param curLang Currently selected language
 	/// @param langs Full list of languages
+	std::unique_ptr<FloatingFormatBar> floating_bar;
+	void CheckShowFloatingFormatBar();
+
 	wxMenu *GetLanguagesMenu(int base_id, wxString const& curLang, wxArrayString const& langs);
 
 public:

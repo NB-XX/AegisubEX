@@ -62,6 +62,7 @@
         "grid/tag/cycle_hiding",
         "",
         "video/tool/frame_match",
+        "video/tool/frame_match_current",
         "video/tool/frame_match_batch",
         "video/tool/motion_track",
         "video/shuffler",
@@ -69,6 +70,7 @@
         "ai/frame_translate",
         "ai/audio_translate",
         "ai/vad_diarize",
+        "audio/vad_align_selection",
         "ai/style_quick",
         "",
         "review/mode"

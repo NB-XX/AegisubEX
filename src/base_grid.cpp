@@ -288,22 +288,35 @@ void BaseGrid::UpdateMaps() {
 
 		if (apply_filter) {
 			bool match = false;
-			wxString text_stripped = to_wx(curdiag.GetStrippedText()).Lower();
-			wxString text_raw = to_wx(curdiag.Text.get()).Lower();
-			wxString actor = to_wx(curdiag.Actor.get()).Lower();
-			wxString style = to_wx(curdiag.Style.get()).Lower();
+			if (filter_query == "__CPS_OVER_20__" || filter_query == "__CPS_OVER_25__" || filter_query == "__CPS_UNDER_5__") {
+				double duration = (curdiag.End - curdiag.Start) / 1000.0;
+				int char_count = static_cast<int>(curdiag.GetStrippedText().size());
+				double cps = duration > 0 ? (char_count / duration) : 0;
+				if (filter_query == "__CPS_OVER_20__") match = (cps > 20.0);
+				else if (filter_query == "__CPS_OVER_25__") match = (cps > 25.0);
+				else if (filter_query == "__CPS_UNDER_5__") match = (cps < 5.0 && duration > 0);
+			} else {
+				wxString text_stripped = to_wx(curdiag.GetStrippedText()).Lower();
+				wxString text_raw = to_wx(curdiag.Text.get()).Lower();
+				wxString actor = to_wx(curdiag.Actor.get()).Lower();
+				wxString style = to_wx(curdiag.Style.get()).Lower();
+				wxString effect = to_wx(curdiag.Effect.get()).Lower();
 
-			if (filter_field == 1) { // 文本
-				match = (text_stripped.Find(query_lower) != wxNOT_FOUND || text_raw.Find(query_lower) != wxNOT_FOUND);
-			} else if (filter_field == 2) { // 说话人
-				match = (actor.Find(query_lower) != wxNOT_FOUND);
-			} else if (filter_field == 3) { // 样式
-				match = (style.Find(query_lower) != wxNOT_FOUND);
-			} else { // 全部字段
-				match = (text_stripped.Find(query_lower) != wxNOT_FOUND ||
-				         text_raw.Find(query_lower) != wxNOT_FOUND ||
-				         actor.Find(query_lower) != wxNOT_FOUND ||
-				         style.Find(query_lower) != wxNOT_FOUND);
+				if (filter_field == 1) { // 文本
+					match = (text_stripped.Find(query_lower) != wxNOT_FOUND || text_raw.Find(query_lower) != wxNOT_FOUND);
+				} else if (filter_field == 2) { // 说话人
+					match = (actor.Find(query_lower) != wxNOT_FOUND);
+				} else if (filter_field == 3) { // 样式
+					match = (style.Find(query_lower) != wxNOT_FOUND);
+				} else if (filter_field == 4) { // 特效
+					match = (effect.Find(query_lower) != wxNOT_FOUND);
+				} else { // 全部字段
+					match = (text_stripped.Find(query_lower) != wxNOT_FOUND ||
+					         text_raw.Find(query_lower) != wxNOT_FOUND ||
+					         actor.Find(query_lower) != wxNOT_FOUND ||
+					         style.Find(query_lower) != wxNOT_FOUND ||
+					         effect.Find(query_lower) != wxNOT_FOUND);
+				}
 			}
 
 			if (!match) {
@@ -526,8 +539,18 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 
 		int x = 0;
 		for (size_t i : agi::util::range(columns.size())) {
-			if (paint_columns[i])
-				paint_text(columns[i]->Header(), x, 0, i);
+			if (paint_columns[i]) {
+				wxString hdr = columns[i]->Header();
+				if (filter_active && !filter_query.empty()) {
+					bool has_filter = false;
+					if (filter_field == 3 && (hdr.Find(to_wx("样式")) != wxNOT_FOUND || hdr.Find("Style") != wxNOT_FOUND)) has_filter = true;
+					else if (filter_field == 2 && (hdr.Find(to_wx("说话人")) != wxNOT_FOUND || hdr.Find("Actor") != wxNOT_FOUND)) has_filter = true;
+					else if (filter_field == 1 && (hdr.Find(to_wx("文本")) != wxNOT_FOUND || hdr.Find("Text") != wxNOT_FOUND)) has_filter = true;
+					else if (hdr.Find("CPS") != wxNOT_FOUND && filter_query.StartsWith("__CPS_")) has_filter = true;
+					if (has_filter) hdr += to_wx(" ▼");
+				}
+				paint_text(hdr, x, 0, i);
+			}
 			x += columns[i]->Width();
 		}
 
@@ -662,8 +685,23 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 	bool alt = event.AltDown();
 	bool ctrl = event.CmdDown();
 
-	// Row that mouse is over
+	// Click on column header to trigger Excel-style quick dropdown filter
 	bool click = event.LeftDown();
+	if (click && event.GetY() < lineHeight) {
+		int col_x = 0;
+		for (size_t i = 0; i < columns.size(); ++i) {
+			if (!columns[i]->Visible()) continue;
+			int w = columns[i]->Width();
+			if (event.GetX() >= col_x && event.GetX() < col_x + w) {
+				ShowHeaderFilterMenu(static_cast<int>(i), wxPoint(col_x, lineHeight));
+				return;
+			}
+			col_x += w;
+		}
+		return;
+	}
+
+	// Row that mouse is over
 	bool dclick = event.LeftDClick();
 	int row = event.GetY() / lineHeight + yPos - 1;
 	if (holding && !click)
@@ -1028,6 +1066,7 @@ void BaseGrid::SetFilter(int field, const wxString& query) {
 	filter_field = field;
 	filter_query = query.Strip(wxString::both);
 	filter_active = !filter_query.empty();
+	FilterChanged(filter_field, filter_query);
 	UpdateMaps();
 }
 
@@ -1035,7 +1074,90 @@ void BaseGrid::ClearFilter() {
 	if (!filter_active && filter_query.empty()) return;
 	filter_active = false;
 	filter_query.clear();
+	FilterChanged(filter_field, filter_query);
 	UpdateMaps();
+}
+
+void BaseGrid::ShowHeaderFilterMenu(int col_idx, const wxPoint& pos) {
+	if (col_idx < 0 || col_idx >= static_cast<int>(columns.size()) || !context) return;
+	wxString hdr = columns[col_idx]->Header();
+
+	int field_type = -1; // 1: 文本, 2: 说话人, 3: 样式, 4: 特效, 5: CPS
+	if (hdr.Find(to_wx("样式")) != wxNOT_FOUND || hdr.Find("Style") != wxNOT_FOUND) field_type = 3;
+	else if (hdr.Find(to_wx("说话人")) != wxNOT_FOUND || hdr.Find("Actor") != wxNOT_FOUND) field_type = 2;
+	else if (hdr.Find(to_wx("特效")) != wxNOT_FOUND || hdr.Find("Effect") != wxNOT_FOUND) field_type = 4;
+	else if (hdr.Find("CPS") != wxNOT_FOUND) field_type = 5;
+
+	if (field_type == -1) return;
+
+	wxMenu menu;
+	constexpr int ID_CLEAR_FILTER = 22000;
+	constexpr int ID_CPS_OVER20 = 22001;
+	constexpr int ID_CPS_OVER25 = 22002;
+	constexpr int ID_CPS_SLOW5 = 22003;
+	constexpr int ID_ITEM_BASE = 22100;
+
+	menu.Append(ID_CLEAR_FILTER, to_wx("全部显示 (清除筛选)"));
+	menu.AppendSeparator();
+
+	if (field_type == 5) { // CPS 列快捷质检
+		menu.Append(ID_CPS_OVER20, to_wx("筛选超速行 (CPS > 20)"));
+		menu.Append(ID_CPS_OVER25, to_wx("筛选极速行 (CPS > 25)"));
+		menu.Append(ID_CPS_SLOW5, to_wx("筛选极慢行 (CPS < 5)"));
+
+		menu.Bind(wxEVT_MENU, [this](wxCommandEvent &evt) {
+			int id = evt.GetId();
+			if (id == ID_CLEAR_FILTER) {
+				ClearFilter();
+			} else if (id == ID_CPS_OVER20) {
+				SetFilter(0, to_wx("__CPS_OVER_20__"));
+			} else if (id == ID_CPS_OVER25) {
+				SetFilter(0, to_wx("__CPS_OVER_25__"));
+			} else if (id == ID_CPS_SLOW5) {
+				SetFilter(0, to_wx("__CPS_UNDER_5__"));
+			}
+		});
+
+		PopupMenu(&menu, pos);
+		return;
+	}
+
+	std::map<std::string, int> counts;
+	for (auto const& diag : context->ass->Events) {
+		std::string val;
+		if (field_type == 3) val = diag.Style.get();
+		else if (field_type == 2) val = diag.Actor.get();
+		else if (field_type == 4) val = diag.Effect.get();
+
+		if (!val.empty()) counts[val]++;
+		else counts["(空白)"]++;
+	}
+
+	std::vector<std::pair<std::string, int>> sorted_items(counts.begin(), counts.end());
+	std::sort(sorted_items.begin(), sorted_items.end(), [](auto const& a, auto const& b) {
+		return a.second > b.second;
+	});
+
+	int cur_id = ID_ITEM_BASE;
+	std::map<int, std::string> id_to_val;
+	for (auto const& [name, cnt] : sorted_items) {
+		if (cur_id >= ID_ITEM_BASE + 200) break;
+		wxString item_label = wxString::Format(to_wx("%s (%d 行)"), to_wx(name), cnt);
+		menu.Append(cur_id, item_label);
+		id_to_val[cur_id] = (name == "(空白)") ? "" : name;
+		++cur_id;
+	}
+
+	menu.Bind(wxEVT_MENU, [this, field_type, id_to_val](wxCommandEvent &evt) {
+		int id = evt.GetId();
+		if (id == ID_CLEAR_FILTER) {
+			ClearFilter();
+		} else if (auto it = id_to_val.find(id); it != id_to_val.end()) {
+			SetFilter(field_type, to_wx(it->second));
+		}
+	});
+
+	PopupMenu(&menu, pos);
 }
 
 int BaseGrid::GetTotalEventsCount() const {
@@ -1095,6 +1217,10 @@ ReviewFilterBar::ReviewFilterBar(wxWindow *parent, agi::Context *context, BaseGr
 
 	filter_conn = grid->FilterCountsChanged.Connect([this](int displayed, int total) {
 		UpdateCountLabel(displayed, total);
+	});
+	filter_change_conn = grid->FilterChanged.Connect([this](int field, const wxString& query) {
+		if (field_choice) field_choice->SetSelection(std::clamp(field, 0, 3));
+		if (query_ctrl) query_ctrl->ChangeValue(query.StartsWith("__CPS_") ? to_wx("CPS 异常筛选") : query);
 	});
 	review_conn = context->videoController->AddReviewModeListener(&ReviewFilterBar::OnReviewModeChanged, this);
 }

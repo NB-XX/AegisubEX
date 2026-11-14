@@ -175,6 +175,7 @@ bool MatchLineNativePixel(agi::Context *c, AssDialogue *line, PixelRegion region
 	if (bound_hi_ms >= 0)
 		right_limit = std::min(right_limit, std::max(c->videoController->FrameAtTime(std::min(video_end, bound_hi_ms), agi::vfr::END), reference_frame));
 	int coarse_step = std::max(1, provider->GetFPS().FrameAtTime(500));
+	int medium_step = std::max(1, provider->GetFPS().FrameAtTime(100));
 
 	std::vector<uint8_t> exclude(n_cells, 0);
 	bool use_dark = false;
@@ -323,10 +324,14 @@ bool MatchLineNativePixel(agi::Context *c, AssDialogue *line, PixelRegion region
 	int near_match = reference_frame;
 	for (int candidate = reference_frame - coarse_step; candidate >= left_limit && !cancelled; candidate -= coarse_step) {
 		if (!matches(candidate)) {
-			// The start lies between this mismatch and the last known match
-			// at most a coarse step later. Walk that gap forward one frame at
-			// a time: consecutive frames decode in order without re-seeking.
-			int b = candidate + 1;
+			// 多尺度金字塔定界：在 500ms 跨度内先以 100ms 中跨度快速跃迁，再以单帧精度收敛
+			int b = candidate;
+			if (medium_step > 1 && medium_step < coarse_step) {
+				while (b + medium_step < near_match && !cancelled && !matches(b + medium_step)) {
+					b += medium_step;
+				}
+			}
+			++b;
 			while (b < near_match && !cancelled) {
 				if (matches(b)) {
 					// 确认真实起始帧：抗瞬态杂讯判定
@@ -370,9 +375,15 @@ bool MatchLineNativePixel(agi::Context *c, AssDialogue *line, PixelRegion region
 	near_match = reference_frame;
 	for (int candidate = reference_frame + coarse_step; candidate <= right_limit && !cancelled; candidate += coarse_step) {
 		if (!matches(candidate)) {
-			// 在已知匹配的 near_match 与首次失配的 candidate 之间，以单帧精度向前推进
-			int last = near_match;
-			for (int f = near_match + 1; f < candidate && !cancelled; ++f) {
+			// 多尺度金字塔定界：在 500ms 跨度内先以 100ms 中跨度快速跃迁，再以单帧精度收敛
+			int f_start = near_match;
+			if (medium_step > 1 && medium_step < coarse_step) {
+				while (f_start + medium_step < candidate && !cancelled && matches(f_start + medium_step)) {
+					f_start += medium_step;
+				}
+			}
+			int last = f_start;
+			for (int f = f_start + 1; f < candidate && !cancelled; ++f) {
 				if (!matches(f)) {
 					// 抗压缩噪点与瞬态杂讯：如果仅当前帧跌破阈值，但下一帧依然匹配，说明属于视频压缩/微幅交织杂讯
 					if (f + 1 < candidate && matches(f + 1)) {
@@ -573,13 +584,7 @@ bool MatchLineToRegion(agi::Context *c, AssDialogue *line, PixelRegion region, i
 				if (out_engine_used) *out_engine_used = 1;
 				return true;
 			}
-			if (engine_mode == 1) {
-				if (status) *status = neural_status;
-				return false;
-			}
-		} else if (engine_mode == 1) {
-			if (status) *status = kMatchNoPattern;
-			return false;
+			// 若深度学习笔画检测未收敛或文字笔画特征不充分，自动平滑降级至经典双极性像素模式兜底
 		}
 	}
 
@@ -819,6 +824,74 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 				to_wx("批量对帧完成：已实时更新 %d 行时间轴 [模式: %s]"),
 				changed, mode_label));
 		}
+	}
+}
+
+void VisualToolTimingRegion::MatchCurrentLine(agi::Context *context) {
+	if (!context) return;
+	auto provider = context->project->VideoProvider();
+	auto line = context->selectionController->GetActiveLine();
+	if (!provider) {
+		wxMessageBox(to_wx("请先加载视频再执行快速对帧。"), to_wx("快速对帧 (Ctrl+Alt+D)"), wxOK | wxICON_WARNING, context->parent);
+		return;
+	}
+	if (!line) {
+		wxMessageBox(to_wx("请先在字幕表格中选择一行字幕。"), to_wx("快速对帧 (Ctrl+Alt+D)"), wxOK | wxICON_INFORMATION, context->parent);
+		return;
+	}
+	if (!HasPresetRegion()) {
+		wxMessageBox(to_wx("尚未设定字幕区域。请先使用“视觉对帧”工具框选或标定字幕位置。"), to_wx("快速对帧 (Ctrl+Alt+D)"), wxOK | wxICON_INFORMATION, context->parent);
+		return;
+	}
+	if (provider->GetFrameCount() <= 0 || provider->GetWidth() <= 0 || provider->GetHeight() <= 0) return;
+
+	int x0 = std::clamp(static_cast<int>(OPT_GET("Tool/Frame Match/Region X0")->GetDouble() * provider->GetWidth()), 0, provider->GetWidth() - 1);
+	int x1 = std::clamp(static_cast<int>(OPT_GET("Tool/Frame Match/Region X1")->GetDouble() * provider->GetWidth()), 0, provider->GetWidth());
+	int y0 = std::clamp(static_cast<int>(OPT_GET("Tool/Frame Match/Region Y0")->GetDouble() * provider->GetHeight()), 0, provider->GetHeight() - 1);
+	int y1 = std::clamp(static_cast<int>(OPT_GET("Tool/Frame Match/Region Y1")->GetDouble() * provider->GetHeight()), 0, provider->GetHeight());
+	PixelRegion region{x0, y0, x1, y1};
+	if (region.x1 - region.x0 < 8 || region.y1 - region.y0 < 6) return;
+
+	int frame_count = provider->GetFrameCount();
+	int reference_frame = std::clamp(context->videoController->GetFrameN(), 0, frame_count - 1);
+	int minimum_similarity = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt(), 50, 95));
+
+	int new_start = 0, new_end = 0;
+	int status = kMatchOk;
+	int engine_used = 0;
+	MaskCache cache;
+
+	bool ok = MatchLineToRegion(context, line, region, reference_frame, new_start, new_end,
+		minimum_similarity, -1, -1, nullptr, &status, &cache, -1, &engine_used, true);
+
+	if ((!ok || status == kMatchNoPattern) && line->End > line->Start) {
+		int mid_time = static_cast<int>(line->Start + (line->End - line->Start) / 2);
+		int mid_frame = std::clamp(context->videoController->FrameAtTime(mid_time, agi::vfr::START), 0, frame_count - 1);
+		if (mid_frame != reference_frame) {
+			MaskCache retry_cache;
+			ok = MatchLineToRegion(context, line, region, mid_frame, new_start, new_end,
+				minimum_similarity, -1, -1, nullptr, &status, &retry_cache, -1, &engine_used, true);
+		}
+	}
+
+	if (!ok || status != kMatchOk || new_end <= new_start) {
+		if (context->frame)
+			context->frame->SetStatusText(to_wx("快速对帧：当前画面未检出清晰字幕或相似度未达标"));
+		return;
+	}
+
+	line->Start = new_start;
+	line->End = new_end;
+	context->ass->Commit(_("match subtitle timing to picked region"), AssFile::COMMIT_DIAG_TIME, -1, line);
+	context->selectionController->SetActiveLine(line);
+	context->videoController->JumpToTime(line->Start);
+
+	if (context->frame) {
+		context->frame->SetStatusText(wxString::Format(
+			to_wx("单键快速对帧完成 [%s - %s] (第 %d 行)"),
+			to_wx(agi::Time(line->Start).GetAssFormatted()),
+			to_wx(agi::Time(line->End).GetAssFormatted()),
+			line->Row + 1));
 	}
 }
 
