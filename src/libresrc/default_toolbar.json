@@ -70,7 +70,6 @@
         "ai/frame_translate",
         "ai/audio_translate",
         "ai/vad_diarize",
-        "audio/vad_align_selection",
         "ai/style_quick",
         "",
         "review/mode"

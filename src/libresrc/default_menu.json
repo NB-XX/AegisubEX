@@ -76,8 +76,6 @@
         { "command" : "time/snap/scene" },
         { "command" : "time/frame/current" },
         {},
-        { "command" : "audio/vad_align_selection", "text" : "AI 语音自动对轴与长句拆分 (VAD)..." },
-        {},
         { "submenu" : "main/timing/make times continuous", "text" : "Make Times Continuous" }
     ],
     "main/timing/make times continuous" : [
@@ -140,7 +138,6 @@
         { "command" : "audio/open/noise" },
         {},
         { "command" : "ai/vad_diarize" },
-        { "command" : "audio/vad_align_selection", "text" : "AI 语音自动对轴与长句拆分 (VAD)..." },
         { "command" : "ai/audio_translate" }
     ],
     "main/view" : [
