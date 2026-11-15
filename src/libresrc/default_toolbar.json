@@ -62,7 +62,6 @@
         "grid/tag/cycle_hiding",
         "",
         "video/tool/frame_match",
-        "video/tool/frame_match_current",
         "video/tool/frame_match_batch",
         "video/tool/motion_track",
         "video/shuffler",

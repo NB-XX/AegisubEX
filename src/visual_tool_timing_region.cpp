@@ -856,13 +856,30 @@ void VisualToolTimingRegion::MatchCurrentLine(agi::Context *context) {
 	int reference_frame = std::clamp(context->videoController->GetFrameN(), 0, frame_count - 1);
 	int minimum_similarity = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt(), 50, 95));
 
+	int engine_mode = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 2));
+	wxString mode_label;
+	if (engine_mode == 0) mode_label = to_wx("智能双模");
+	else if (engine_mode == 1) mode_label = to_wx("深度学习笔画检测");
+	else mode_label = to_wx("经典原生像素");
+
+	int total_work = 30;
+	wxProgressDialog progress(
+		wxString::Format(to_wx("快速对帧 (Ctrl+Alt+D) [%s]"), mode_label),
+		wxString::Format(to_wx("正在使用 %s 扫描匹配当前行字幕区间..."), mode_label),
+		total_work, context->parent, wxPD_APP_MODAL | wxPD_AUTO_HIDE);
+
+	auto on_sample_pump = [&](int samples) {
+		wxSafeYield(context->parent, true);
+		return progress.Update(std::min(samples, total_work));
+	};
+
 	int new_start = 0, new_end = 0;
 	int status = kMatchOk;
 	int engine_used = 0;
 	MaskCache cache;
 
 	bool ok = MatchLineToRegion(context, line, region, reference_frame, new_start, new_end,
-		minimum_similarity, -1, -1, nullptr, &status, &cache, -1, &engine_used, true);
+		minimum_similarity, -1, -1, on_sample_pump, &status, &cache, -1, &engine_used, true);
 
 	if ((!ok || status == kMatchNoPattern) && line->End > line->Start) {
 		int mid_time = static_cast<int>(line->Start + (line->End - line->Start) / 2);
@@ -870,7 +887,7 @@ void VisualToolTimingRegion::MatchCurrentLine(agi::Context *context) {
 		if (mid_frame != reference_frame) {
 			MaskCache retry_cache;
 			ok = MatchLineToRegion(context, line, region, mid_frame, new_start, new_end,
-				minimum_similarity, -1, -1, nullptr, &status, &retry_cache, -1, &engine_used, true);
+				minimum_similarity, -1, -1, on_sample_pump, &status, &retry_cache, -1, &engine_used, true);
 		}
 	}
 
@@ -879,6 +896,8 @@ void VisualToolTimingRegion::MatchCurrentLine(agi::Context *context) {
 			context->frame->SetStatusText(to_wx("快速对帧：当前画面未检出清晰字幕或相似度未达标"));
 		return;
 	}
+
+	progress.Update(total_work);
 
 	line->Start = new_start;
 	line->End = new_end;
