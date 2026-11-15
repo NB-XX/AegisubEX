@@ -181,7 +181,7 @@ python -m ninja -C build-local aegisub.exe
 # 4. 链接生成运行版
 cmd /c "build-local\link-ready.cmd"
 ```
-编译产物位于 `build-local\aegisub-ready.exe`，直接运行即可。
+编译产物位于 `build-local\aegisub.exe`，直接运行或双击根目录 `打开本地新版Aegisub.cmd` 即可。
 
 ---
 
