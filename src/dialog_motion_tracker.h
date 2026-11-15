@@ -230,7 +230,8 @@ public:
 
 		auto* radius_sizer = new wxBoxSizer(wxHORIZONTAL);
 		radius_sizer->Add(new wxStaticText(opt_box, wxID_ANY, to_wx("搜索半径:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-		spin_search_radius_ = new wxSpinCtrl(opt_box, wxID_ANY, "40", wxDefaultPosition, wxSize(70, -1), wxSP_ARROW_KEYS, 15, 120, 40);
+		spin_search_radius_ = new wxSpinCtrl(opt_box, wxID_ANY, "40", wxDefaultPosition, wxSize(75, -1), wxSP_ARROW_KEYS, 15, 300, 40);
+		spin_search_radius_->SetToolTip(to_wx("单帧最大位移搜索半径。若花字运动较快、位移大或停留在原地没有跟随，请调大此值（如 80~160px 或更高）"));
 		radius_sizer->Add(spin_search_radius_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
 		radius_sizer->Add(new wxStaticText(opt_box, wxID_ANY, to_wx("px")), 0, wxALIGN_CENTER_VERTICAL);
 		grid_opts->Add(radius_sizer, 0, wxALIGN_CENTER_VERTICAL);

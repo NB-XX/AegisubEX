@@ -152,7 +152,7 @@ inline TrackPoint MatchNextFrame(
 			float s_curr = ComputeNCC(cand, t_curr);
 			float s_init = ComputeNCC(cand, t_init);
 			// 双模板融合：动态模板跟形变，初始模板锁原位防漂移
-			float score = 0.65f * s_curr + 0.35f * s_init;
+			float score = 0.55f * s_curr + 0.45f * s_init;
 			if (score > best_score) {
 				best_score = score;
 				best_dx = dx;
@@ -213,8 +213,8 @@ inline TrackPoint MatchNextFrame(
 	pt.score = best_score;
 	pt.valid = (best_score >= 0.25f);
 
-	// 动态模板 EMA 平滑更新
-	if (pt.valid && alpha > 0.0) {
+	// 动态模板 EMA 平滑更新 (增加质量门禁，仅在高置信度时微调更新，防止把背景漂移学进模板)
+	if (pt.valid && pt.score >= 0.45f && alpha > 0.0) {
 		cand.Extract(f, static_cast<int>(std::round(pt.x - box_w / 2.0)), static_cast<int>(std::round(pt.y - box_h / 2.0)), box_w, box_h);
 		for (size_t i = 0; i < t_curr.data.size(); ++i) {
 			t_curr.data[i] = static_cast<float>(t_curr.data[i] * (1.0 - alpha) + cand.data[i] * alpha);
