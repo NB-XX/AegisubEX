@@ -58,9 +58,10 @@ resource_version='0, 0, 0'
 if test x$git_version_str != x; then
   git_version_str="${git_version_str##v}"
   tagged_release=1
-  if [ $(echo $git_version_str | grep '^[0-9]\.[0-9]\.[0-9]$') ]; then
-    installer_version=$git_version_str
-    resource_version=$(echo $git_version_str | sed 's/\./, /g')
+  base_version=$(echo "$git_version_str" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+  if [ -n "$base_version" ]; then
+    installer_version=$base_version
+    resource_version=$(echo $base_version | sed 's/\./, /g')
   fi
 else
   if ! git_branch="$(git symbolic-ref --short HEAD 2> /dev/null)"; then
