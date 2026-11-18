@@ -624,13 +624,7 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 
 	int frame_count = provider->GetFrameCount();
 	int base_similarity = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt(), 50, 95));
-	int rerun_step = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Rerun Step")->GetInt(), 5, 30));
-	// Matching in this workflow targets back-to-back subtitles, so the batch
-	// keeps the result non-overlapping: after the normal pass we find rows
-	// whose new interval swallowed a neighbour, re-run just those with a
-	// stricter similarity and search bounds that stop at the neighbour, and
-	// finally clamp whatever is left so consecutive lines only touch.
-	constexpr int neighbour_tol = 0; // ms of slack while re-running (strict boundaries, no overlap)
+	// (rerun_step 与 neighbour_tol 旧回退策略已废弃，仅保留 base_similarity 用于主匹配)
 
 	std::vector<AssDialogue *> order;
 	for (auto& event : context->ass->Events)
@@ -764,51 +758,75 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 	}
 
 	if (!aborted) {
-		for (int round = 1; round <= 2; ++round) {
-			// Bounds per re-run row: -1 = unbounded on that side.
-			std::unordered_map<size_t, std::pair<int, int>> bounds;
-			auto add_bound = [&](size_t pos, int lo, int hi) {
-				std::pair<int, int> b{-1, -1};
-				if (auto it = bounds.find(pos); it != bounds.end()) b = it->second;
-				if (lo >= 0) b.first = std::max(b.first, lo);
-				if (hi >= 0) b.second = b.second < 0 ? hi : std::min(b.second, hi);
-				bounds[pos] = b;
-			};
-			for (size_t i = 1; i < order.size(); ++i) {
-				if (cur[i].first >= cur[i - 1].second) continue;
-				// Overlap. Blame whichever row moved away from its original slot;
-				// pairs that were already overlapping in the source file are left alone.
-				if (moved(i)) add_bound(i, cur[i - 1].second - neighbour_tol, -1);
-				if (moved(i - 1)) add_bound(i - 1, -1, cur[i].first + neighbour_tol);
-			}
-			if (bounds.empty()) break;
+		// ── 阶段一：同样式字幕碰撞自动以中间点切分 ──────────────────────────────
+		// 用户按样式排序批量对帧时，同样式字幕在时间上并不连续，前后有其他样式字幕穿插；
+		// 如果对帧结果导致同批次内相邻两行（同样式）时间重叠，说明其中一行的端点被
+		// 过度扩展到了对方区间，此时以 (A.newEnd + B.newStart) / 2 作为切分点直接修复，
+		// 而无需重新对帧（重跑结果往往更差，因为没有真正的"连续背景遮挡"场景）。
+		// 对于不同样式的字幕重叠（来自不同轨道/角色），视为正常多轨，不干预。
+		{
+			progress.Update(static_cast<int>(lines.size()) + 1, to_wx("正在修复同样式碰撞时间戳..."));
 			wxSafeYield(context->parent, true);
-			if (!progress.Update(static_cast<int>(lines.size()) * (1 + round), round == 1
-				? to_wx("正在重新校验并对齐相邻碰撞行...")
-				: to_wx("正在以更严格阈值二次对齐冲突行..."))) break;
-			int similarity = std::min(88, base_similarity + round * rerun_step);
-			for (auto& [pos, b] : bounds) {
-				wxSafeYield(context->parent, true);
-				if (progress.WasCancelled()) { aborted = true; break; }
-				if (pos < order.size()) {
-					try_match(order[pos], pos, similarity, b.first, b.second);
-					if (cur[pos].first < cur[pos].second) {
-						apply_line_change(order[pos], cur[pos].first, cur[pos].second);
-					}
+
+			// 仅在批次内相邻行间检查（lines 已按时间排序）
+			for (size_t i = 1; i < lines.size(); ++i) {
+				AssDialogue *prev = lines[i - 1];
+				AssDialogue *curr = lines[i];
+				size_t pi = index[prev];
+				size_t ci = index[curr];
+				// 只处理样式相同、且对帧后发生重叠的情况
+				if (prev->Style != curr->Style) continue;
+				// 未被对帧改动的行不参与修复（原始文件就重叠则跳过）
+				if (!moved(pi) && !moved(ci)) continue;
+
+				int a_end   = cur[pi].second;  // A 的检测结束点
+				int b_start = cur[ci].first;    // B 的检测开始点
+				if (a_end <= b_start) continue; // 无重叠，正常
+
+				// 状况一：B.start 被检测扩展进入 A 的区间（a_end > b_start）
+				// 状况二：A.end 被检测扩展进入 B 的区间（同上，对称处理）
+				// → 以两者各自检测范围的"接触面中点"作为切分点
+				// 切分点取 (A.newEnd + B.newStart) / 2 向帧边界对齐（简化取 ms 中点）
+				int mid = (a_end + b_start) / 2;
+				// 保证中点在各自区间内有效
+				if (mid <= cur[pi].first)  mid = cur[pi].first  + 1;
+				if (mid >= cur[ci].second) mid = cur[ci].second - 1;
+				// 保证修复后每行至少有 1 ms 有效区间
+				if (mid > cur[pi].first && mid < cur[ci].second) {
+					cur[pi].second = mid;
+					cur[ci].first  = mid;
+					apply_line_change(prev, cur[pi].first, cur[pi].second);
+					apply_line_change(curr, cur[ci].first, cur[ci].second);
 				}
 			}
-			if (aborted) break;
 		}
-		// Final guarantee: clamp the rows we changed so no overlap remains.
-		for (size_t i = 0; i < order.size(); ++i) {
-			if (!moved(i)) continue;
-			if (i > 0 && cur[i].first < cur[i - 1].second)
-				cur[i].first = cur[i - 1].second;
-			if (i + 1 < order.size() && cur[i].second > cur[i + 1].first)
-				cur[i].second = cur[i + 1].first;
-			if (cur[i].first >= cur[i].second)
-				cur[i] = orig(i);
-			apply_line_change(order[i], cur[i].first, cur[i].second);
+
+		// ── 阶段二：兜底 clamp（仅对与批次内其他行发生重叠且样式不同的行生效）──
+		// 不同样式的字幕重叠是正常多轨现象，这里只做保守 clamp 以防意外极端情况，
+		// 不再对相邻行重跑匹配（废弃旧的"回退重跑"策略，因为它对非连续场景无效）。
+		for (size_t i = 0; i < lines.size(); ++i) {
+			AssDialogue *line = lines[i];
+			size_t pos = index[line];
+			if (!moved(pos)) continue;
+			// 只 clamp 批次内时间相邻的同样式邻行（之前阶段一已经处理，
+			// 这里仅对极端情况兜底，不 clamp 不同样式字幕）
+			if (i > 0) {
+				AssDialogue *prev = lines[i - 1];
+				size_t pi = index[prev];
+				if (prev->Style == line->Style && cur[pos].first < cur[pi].second) {
+					cur[pos].first = cur[pi].second;
+				}
+			}
+			if (i + 1 < lines.size()) {
+				AssDialogue *next = lines[i + 1];
+				size_t ni = index[next];
+				if (next->Style == line->Style && cur[pos].second > cur[ni].first) {
+					cur[pos].second = cur[ni].first;
+				}
+			}
+			if (cur[pos].first >= cur[pos].second)
+				cur[pos] = orig(pos);
+			apply_line_change(line, cur[pos].first, cur[pos].second);
 		}
 	}
 
