@@ -461,7 +461,8 @@
 			"Region X0" : -1.0,
 			"Region Y0" : -1.0,
 			"Region X1" : -1.0,
-			"Region Y1" : -1.0
+			"Region Y1" : -1.0,
+			"Region Is Anchor" : false
 		},
 		"AI" : {
 			"Active Profile" : "默认配置",

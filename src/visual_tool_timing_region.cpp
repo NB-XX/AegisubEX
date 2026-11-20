@@ -213,26 +213,37 @@ bool MatchLineNativePixel(agi::Context *c, AssDialogue *line, PixelRegion region
 		int dyn_b = dyn_count(ref, false, static_b);
 		int dyn_d = dyn_count(ref, true, static_d);
 		int min_req = std::max(8, static_cast<int>(n_cells * 0.012));
+		int bg_cap = static_cast<int>(n_cells * 0.50);
+		int min_fg = std::max(min_req, static_cast<int>(n_cells * 0.03));
 		if (dyn_b >= min_req || dyn_d >= min_req) {
-			use_dark = dyn_d > dyn_b;
+			bool b_is_bg = dyn_b > bg_cap;
+			bool d_is_bg = dyn_d > bg_cap;
+			if (b_is_bg && !d_is_bg && dyn_d >= min_fg)
+				use_dark = true;
+			else if (d_is_bg && !b_is_bg && dyn_b >= min_fg)
+				use_dark = false;
+			else
+				use_dark = dyn_d > dyn_b;
 			exclude = use_dark ? static_d : static_b;
 			reference_mask = use_dark ? ref.dark : ref.bright;
 			reference_pixels = use_dark ? dyn_d : dyn_b;
 			return true;
 		}
 		int min_solid = std::max(10, static_cast<int>(n_cells * 0.015));
-		if (int bright_on = std::count(ref.bright.begin(), ref.bright.end(), uint8_t(1)); bright_on >= min_solid) {
-			use_dark = false;
+		int bright_on = static_cast<int>(std::count(ref.bright.begin(), ref.bright.end(), uint8_t(1)));
+		int dark_on = static_cast<int>(std::count(ref.dark.begin(), ref.dark.end(), uint8_t(1)));
+		if (bright_on >= min_solid || dark_on >= min_solid) {
+			bool b_is_bg = bright_on > bg_cap;
+			bool d_is_bg = dark_on > bg_cap;
+			if (b_is_bg && !d_is_bg && dark_on >= std::max(min_solid, min_fg))
+				use_dark = true;
+			else if (d_is_bg && !b_is_bg && bright_on >= std::max(min_solid, min_fg))
+				use_dark = false;
+			else
+				use_dark = (bright_on < min_solid) || (dark_on >= min_solid && dark_on > bright_on);
 			exclude.assign(n_cells, 0);
-			reference_mask = ref.bright;
-			reference_pixels = bright_on;
-			return true;
-		}
-		if (int dark_on = std::count(ref.dark.begin(), ref.dark.end(), uint8_t(1)); dark_on >= min_solid) {
-			use_dark = true;
-			exclude.assign(n_cells, 0);
-			reference_mask = ref.dark;
-			reference_pixels = dark_on;
+			reference_mask = use_dark ? ref.dark : ref.bright;
+			reference_pixels = use_dark ? dark_on : bright_on;
 			return true;
 		}
 		return false;
@@ -600,11 +611,12 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 	auto provider = context->project->VideoProvider();
 	auto lines = context->selectionController->GetSortedSelection();
 	if (!provider || lines.empty()) return;
-	// Process in time order, whatever the grid order is, so each row can
-	// chain off the row whose detected end sits just before it.
+	// 按原始时间顺序稳定排序，保证同一批次内同样式字幕按先后顺序配对修复
 	std::sort(lines.begin(), lines.end(), [](AssDialogue const *a, AssDialogue const *b) {
 		int s0 = a->Start, s1 = b->Start;
 		if (s0 != s1) return s0 < s1;
+		int e0 = a->End, e1 = b->End;
+		if (e0 != e1) return e0 < e1;
 		return a->Row < b->Row;
 	});
 	if (!HasPresetRegion()) {
@@ -620,28 +632,30 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 	int y0 = std::clamp(static_cast<int>(OPT_GET("Tool/Frame Match/Region Y0")->GetDouble() * provider->GetHeight()), 0, provider->GetHeight() - 1);
 	int y1 = std::clamp(static_cast<int>(OPT_GET("Tool/Frame Match/Region Y1")->GetDouble() * provider->GetHeight()), 0, provider->GetHeight());
 	PixelRegion region{x0, y0, x1, y1};
-	if (region.x1 - region.x0 < 12 || region.y1 - region.y0 < 6) return;
+	if (region.x1 - region.x0 < 8 || region.y1 - region.y0 < 6) return;
 
 	int frame_count = provider->GetFrameCount();
 	int base_similarity = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt(), 50, 95));
-	// (rerun_step 与 neighbour_tol 旧回退策略已废弃，仅保留 base_similarity 用于主匹配)
+	int engine_mode = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 2));
+	bool is_anchor_mode = OPT_GET("Tool/Frame Match/Region Is Anchor")->GetBool();
 
-	std::vector<AssDialogue *> order;
-	for (auto& event : context->ass->Events)
-		order.push_back(&event);
+	// 不可变快照：在实时写回时间戳之前冻结原始区间，避免 moved() 与碰撞判定失真
 	std::unordered_map<AssDialogue *, size_t> index;
-	std::vector<std::pair<int, int>> cur(order.size());
-	for (size_t i = 0; i < order.size(); ++i) {
-		index[order[i]] = i;
-		cur[i] = { static_cast<int>(order[i]->Start), static_cast<int>(order[i]->End) };
+	std::vector<std::pair<int, int>> orig_times(lines.size());
+	std::vector<std::pair<int, int>> cur(lines.size());
+	std::vector<bool> matched_ok(lines.size(), false);
+	index.reserve(lines.size());
+	for (size_t i = 0; i < lines.size(); ++i) {
+		index[lines[i]] = i;
+		orig_times[i] = { static_cast<int>(lines[i]->Start), static_cast<int>(lines[i]->End) };
+		cur[i] = orig_times[i];
 	}
-	auto orig = [&](size_t i) { return std::pair<int, int>{ static_cast<int>(order[i]->Start), static_cast<int>(order[i]->End) }; };
-	auto moved = [&](size_t i) { return cur[i] != orig(i); };
+	auto moved = [&](size_t i) { return cur[i] != orig_times[i]; };
 
 	// 核心：智能多点探测基准帧，杜绝盲目中点导致的空帧/断句/闪烁误判
-	auto find_best_ref_frame = [&](AssDialogue *line) -> int {
-		int start_f = std::clamp(context->videoController->FrameAtTime(line->Start, agi::vfr::START), 0, frame_count - 1);
-		int end_f = std::clamp(context->videoController->FrameAtTime(line->End, agi::vfr::END), 0, frame_count - 1);
+	auto find_best_ref_frame = [&](int orig_start, int orig_end) -> int {
+		int start_f = std::clamp(context->videoController->FrameAtTime(orig_start, agi::vfr::START), 0, frame_count - 1);
+		int end_f = std::clamp(context->videoController->FrameAtTime(orig_end, agi::vfr::END), 0, frame_count - 1);
 		if (end_f <= start_f) return start_f;
 
 		// 候选采样点：优先中点 (0.5)，其次两翼 (0.35, 0.65, 0.20, 0.80)
@@ -649,7 +663,7 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 		int best_frame = start_f + (end_f - start_f) / 2;
 		float best_score = -1.0f;
 
-		if (DBNetDetector::Get().IsAvailable()) {
+		if (engine_mode != 2 && DBNetDetector::Get().IsAvailable()) {
 			for (double r : ratios) {
 				int cand_f = std::clamp(static_cast<int>(start_f + std::round((end_f - start_f) * r)), 0, frame_count - 1);
 				auto cand_img = provider->GetFrame(cand_f, context->videoController->TimeAtFrame(cand_f), true);
@@ -662,20 +676,29 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 				int s_x1 = static_cast<int>(std::round(region.x1 * scale_x));
 				int s_y1 = static_cast<int>(std::round(region.y1 * scale_y));
 
-				int anchor_x = (s_x0 + s_x1) / 2;
-				int anchor_y = (s_y0 + s_y1) / 2;
-				int anchor_h = std::max(16, s_y1 - s_y0);
 				int bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+				bool found_box = false;
+				if (is_anchor_mode) {
+					int anchor_x = (s_x0 + s_x1) / 2;
+					int anchor_y = (s_y0 + s_y1) / 2;
+					int anchor_h = std::max(16, s_y1 - s_y0);
+					found_box = DBNetDetector::Get().FindAnchorSubtitleBox(
+						cand_img->data.data(), cand_img->width, cand_img->height, cand_img->pitch, cand_img->flipped,
+						anchor_x, anchor_y, anchor_h, bx0, by0, bx1, by1);
+				} else {
+					found_box = DBNetDetector::Get().GetTextBoundingBox(
+						cand_img->data.data(), cand_img->width, cand_img->height, cand_img->pitch, cand_img->flipped,
+						s_x0, s_y0, s_x1, s_y1, bx0, by0, bx1, by1);
+				}
 
-				if (DBNetDetector::Get().FindAnchorSubtitleBox(
-					cand_img->data.data(), cand_img->width, cand_img->height, cand_img->pitch, cand_img->flipped,
-					anchor_x, anchor_y, anchor_h, bx0, by0, bx1, by1)) {
+				if (found_box) {
 					float score = static_cast<float>(bx1 - bx0);
 					if (score > best_score) {
 						best_score = score;
 						best_frame = cand_f;
 					}
-					if (score >= 60.0f) break; // 已获取足够清晰扎实的文字框，直接锁定基准帧
+					float good_w = is_anchor_mode ? 60.0f : std::min(60.0f, std::max(16.0f, static_cast<float>(s_x1 - s_x0) * 0.4f));
+					if (score >= good_w) break; // 已获取足够清晰扎实的文字框，直接锁定基准帧
 				}
 			}
 		}
@@ -689,14 +712,27 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 		return true;
 	};
 
-	auto try_match = [&](AssDialogue *line, size_t pos, int similarity, int lo, int hi, int hint_frame = -1) {
-		int start = line->Start, end = line->End;
-		// 关键架构隔离：为每行独立创建 line_cache，严禁行间共用掩模缓存造成坐标尺寸错乱与内存越界
-		MaskCache line_cache;
-		int ref = find_best_ref_frame(line);
+	auto try_match = [&](AssDialogue *line, size_t pos, int similarity, int lo, int hi) {
+		auto [orig_s, orig_e] = orig_times[pos];
+		int start = orig_s, end = orig_e;
+		int start_f = std::clamp(context->videoController->FrameAtTime(orig_s, agi::vfr::START), 0, frame_count - 1);
+		int end_f = std::clamp(context->videoController->FrameAtTime(orig_e, agi::vfr::END), 0, frame_count - 1);
+		int mid_f = (end_f > start_f) ? (start_f + (end_f - start_f) / 2) : start_f;
+		int ref = find_best_ref_frame(orig_s, orig_e);
 		try {
-			if (MatchLineToRegion(context, line, region, ref, start, end, similarity, lo, hi, on_sample_pump, nullptr, &line_cache, hint_frame, nullptr, true))
+			// 与单行对帧保持完全一致：不传递 chain_hint_frame (-1)，且遵守 Region Is Anchor 框选方式
+			MaskCache line_cache;
+			bool ok = MatchLineToRegion(context, line, region, ref, start, end, similarity, lo, hi, on_sample_pump, nullptr, &line_cache, -1, nullptr, is_anchor_mode);
+			if (!ok && ref != mid_f) {
+				MaskCache retry_cache;
+				start = orig_s;
+				end = orig_e;
+				ok = MatchLineToRegion(context, line, region, mid_f, start, end, similarity, lo, hi, on_sample_pump, nullptr, &retry_cache, -1, nullptr, is_anchor_mode);
+			}
+			if (ok) {
 				cur[pos] = { start, end };
+				matched_ok[pos] = true;
+			}
 		}
 		catch (...) { }
 	};
@@ -716,14 +752,13 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 		wxSafeYield(context->parent, true);
 	};
 
-	int total_steps = static_cast<int>(lines.size()) * 3 + 1;
+	int total_steps = static_cast<int>(lines.size()) + 1;
 	wxProgressDialog progress(to_wx("批量视觉对帧"),
-		to_wx("正在根据竖线锚点与自适应文字模型批量对帧..."),
+		to_wx("正在根据设定区域与自适应文字模型批量对帧..."),
 		total_steps, context->parent,
 		wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_CAN_ABORT | wxPD_ELAPSED_TIME);
 	bool aborted = false;
 
-	int last_end_ms = -1;
 	for (size_t i = 0; i < lines.size(); ++i) {
 		wxSafeYield(context->parent, true);
 		AssDialogue *line = lines[i];
@@ -734,18 +769,11 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 			break;
 		}
 
-		int hint = -1;
-		if (last_end_ms >= 0) {
-			int gap = static_cast<int>(line->Start) - last_end_ms;
-			if (gap >= -500 && gap <= 500)
-				hint = context->videoController->FrameAtTime(std::max(0, last_end_ms), agi::vfr::START);
-		}
-		try_match(line, pos, base_similarity, -1, -1, hint);
+		try_match(line, pos, base_similarity, -1, -1);
 
 		// 匹配完一行，立即写回时间戳、刷新表格并跳转视频画面！
-		if (cur[pos].first < cur[pos].second) {
+		if (matched_ok[pos] && cur[pos].first < cur[pos].second) {
 			apply_line_change(line, cur[pos].first, cur[pos].second);
-			last_end_ms = cur[pos].second;
 		}
 
 		// 实时更新进度条提示，展示当前行刚刚对帧完成的时间区间
@@ -758,81 +786,91 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 	}
 
 	if (!aborted) {
-		// ── 阶段一：同样式字幕碰撞自动以中间点切分 ──────────────────────────────
-		// 用户按样式排序批量对帧时，同样式字幕在时间上并不连续，前后有其他样式字幕穿插；
-		// 如果对帧结果导致同批次内相邻两行（同样式）时间重叠，说明其中一行的端点被
-		// 过度扩展到了对方区间，此时以 (A.newEnd + B.newStart) / 2 作为切分点直接修复，
-		// 而无需重新对帧（重跑结果往往更差，因为没有真正的"连续背景遮挡"场景）。
-		// 对于不同样式的字幕重叠（来自不同轨道/角色），视为正常多轨，不干预。
-		{
-			progress.Update(static_cast<int>(lines.size()) + 1, to_wx("正在修复同样式碰撞时间戳..."));
-			wxSafeYield(context->parent, true);
+		// 按样式分组后检查每组内的时间相邻对：即使中间穿插了其他样式的字幕，也能准确配对同样式的 A 与 B；
+		// 不同样式的字幕重叠视为正常多轨，完全不干预、不截断。
+		std::unordered_map<std::string, std::vector<AssDialogue *>> style_groups;
+		for (AssDialogue *line : lines)
+			style_groups[line->Style.get()].push_back(line);
 
-			// 仅在批次内相邻行间检查（lines 已按时间排序）
-			for (size_t i = 1; i < lines.size(); ++i) {
-				AssDialogue *prev = lines[i - 1];
-				AssDialogue *curr = lines[i];
+		auto snap_to_frame_boundary = [&](int ms, int lo, int hi) -> int {
+			if (lo + 1 > hi - 1) return std::clamp(ms, lo, hi);
+			int f = std::clamp(context->videoController->FrameAtTime(ms, agi::vfr::START), 0, frame_count - 1);
+			int snapped = context->videoController->TimeAtFrame(f, agi::vfr::START);
+			if (snapped > lo && snapped < hi) return snapped;
+			return std::clamp(ms, lo + 1, hi - 1);
+		};
+
+		progress.Update(static_cast<int>(lines.size()), to_wx("正在检查并修复同样式碰撞时间戳..."));
+		wxSafeYield(context->parent, true);
+
+		constexpr int kEdgeTolMs = 150;
+		for (auto& [style_name, group] : style_groups) {
+			if (group.size() < 2) continue;
+			for (size_t k = 1; k < group.size(); ++k) {
+				AssDialogue *prev = group[k - 1];
+				AssDialogue *curr = group[k];
 				size_t pi = index[prev];
 				size_t ci = index[curr];
-				// 只处理样式相同、且对帧后发生重叠的情况
-				if (prev->Style != curr->Style) continue;
-				// 未被对帧改动的行不参与修复（原始文件就重叠则跳过）
-				if (!moved(pi) && !moved(ci)) continue;
 
-				int a_end   = cur[pi].second;  // A 的检测结束点
-				int b_start = cur[ci].first;    // B 的检测开始点
-				if (a_end <= b_start) continue; // 无重叠，正常
+				if ((!matched_ok[pi] && !matched_ok[ci]) || (!moved(pi) && !moved(ci))) continue;
 
-				// 状况一：B.start 被检测扩展进入 A 的区间（a_end > b_start）
-				// 状况二：A.end 被检测扩展进入 B 的区间（同上，对称处理）
-				// → 以两者各自检测范围的"接触面中点"作为切分点
-				// 切分点取 (A.newEnd + B.newStart) / 2 向帧边界对齐（简化取 ms 中点）
-				int mid = (a_end + b_start) / 2;
-				// 保证中点在各自区间内有效
-				if (mid <= cur[pi].first)  mid = cur[pi].first  + 1;
-				if (mid >= cur[ci].second) mid = cur[ci].second - 1;
-				// 保证修复后每行至少有 1 ms 有效区间
-				if (mid > cur[pi].first && mid < cur[ci].second) {
-					cur[pi].second = mid;
-					cur[ci].first  = mid;
-					apply_line_change(prev, cur[pi].first, cur[pi].second);
-					apply_line_change(curr, cur[ci].first, cur[ci].second);
+				// 若两行原始时间本就大比例重合（同屏双行），不拆分
+				auto [oa_s, oa_e] = orig_times[pi];
+				auto [ob_s, ob_e] = orig_times[ci];
+				int orig_overlap = std::min(oa_e, ob_e) - std::max(oa_s, ob_s);
+				int orig_min_dur = std::min(oa_e - oa_s, ob_e - ob_s);
+				if (orig_min_dur > 0 && orig_overlap > orig_min_dur * 7 / 10)
+					continue;
+
+				int a_s = cur[pi].first, a_e = cur[pi].second;
+				int b_s = cur[ci].first, b_e = cur[ci].second;
+				if (std::min(a_e, b_e) <= std::max(a_s, b_s)) continue; // 实际时间区间无重叠
+
+				if (b_s > a_s + kEdgeTolMs && a_e >= b_e - kEdgeTolMs && b_s < b_e) {
+					// 状况一：A 的结束向右吞并至 B 的结束，B 保留了正确的开始时间 -> 直接复用 B.start 作为 A.end
+					cur[pi].second = b_s;
+				} else if (b_s <= a_s + kEdgeTolMs && a_e < b_e - kEdgeTolMs && a_s < a_e) {
+					// 状况二：B 的开始向左吞并至 A 的开始，A 保留了正确的结束时间 -> 直接复用 A.end 作为 B.start
+					cur[ci].first = a_e;
+				} else if (b_s <= a_s + kEdgeTolMs && a_e >= b_e - kEdgeTolMs) {
+					// 双向完全吞并：两行均扫到了合并后的全区间，优先按原始交界点切分，退化则取整段中点
+					int outer_s = std::min(a_s, b_s);
+					int outer_e = std::max(a_e, b_e);
+					if (outer_e - outer_s >= 2) {
+						int orig_split = (oa_e + ob_s) / 2;
+						int split_ms = (orig_split > outer_s + kEdgeTolMs && orig_split < outer_e - kEdgeTolMs)
+							? snap_to_frame_boundary(orig_split, outer_s, outer_e)
+							: snap_to_frame_boundary((outer_s + outer_e) / 2, outer_s, outer_e);
+						if (split_ms > outer_s && split_ms < outer_e) {
+							cur[pi] = { outer_s, split_ms };
+							cur[ci] = { split_ms, outer_e };
+						}
+					}
+				} else {
+					// 部分交错重叠：仅改动其中一行时直接贴合另一行的边界，否则取重叠区中点对齐到帧
+					if (!moved(ci) && b_s > a_s) {
+						cur[pi].second = b_s;
+					} else if (!moved(pi) && a_e < b_e) {
+						cur[ci].first = a_e;
+					} else if (b_e - a_s >= 2) {
+						int mid = snap_to_frame_boundary((a_e + b_s) / 2, a_s, b_e);
+						cur[pi].second = mid;
+						cur[ci].first = mid;
+					}
 				}
+
+				if (cur[pi].first >= cur[pi].second) cur[pi] = orig_times[pi];
+				if (cur[ci].first >= cur[ci].second) cur[ci] = orig_times[ci];
+				apply_line_change(prev, cur[pi].first, cur[pi].second);
+				apply_line_change(curr, cur[ci].first, cur[ci].second);
 			}
 		}
 
-		// ── 阶段二：兜底 clamp（仅对与批次内其他行发生重叠且样式不同的行生效）──
-		// 不同样式的字幕重叠是正常多轨现象，这里只做保守 clamp 以防意外极端情况，
-		// 不再对相邻行重跑匹配（废弃旧的"回退重跑"策略，因为它对非连续场景无效）。
-		for (size_t i = 0; i < lines.size(); ++i) {
-			AssDialogue *line = lines[i];
-			size_t pos = index[line];
-			if (!moved(pos)) continue;
-			// 只 clamp 批次内时间相邻的同样式邻行（之前阶段一已经处理，
-			// 这里仅对极端情况兜底，不 clamp 不同样式字幕）
-			if (i > 0) {
-				AssDialogue *prev = lines[i - 1];
-				size_t pi = index[prev];
-				if (prev->Style == line->Style && cur[pos].first < cur[pi].second) {
-					cur[pos].first = cur[pi].second;
-				}
-			}
-			if (i + 1 < lines.size()) {
-				AssDialogue *next = lines[i + 1];
-				size_t ni = index[next];
-				if (next->Style == line->Style && cur[pos].second > cur[ni].first) {
-					cur[pos].second = cur[ni].first;
-				}
-			}
-			if (cur[pos].first >= cur[pos].second)
-				cur[pos] = orig(pos);
-			apply_line_change(line, cur[pos].first, cur[pos].second);
-		}
+		progress.Update(total_steps);
 	}
 
 	if (changed) {
 		if (context->frame) {
-			int engine_mode = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 2));
 			wxString mode_label;
 			if (engine_mode == 0) mode_label = to_wx("智能双模");
 			else if (engine_mode == 1) mode_label = to_wx("深度学习笔画检测");
@@ -875,6 +913,7 @@ void VisualToolTimingRegion::MatchCurrentLine(agi::Context *context) {
 	int minimum_similarity = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt(), 50, 95));
 
 	int engine_mode = static_cast<int>(std::clamp<int64_t>(OPT_GET("Tool/Frame Match/Engine")->GetInt(), 0, 2));
+	bool is_anchor_mode = OPT_GET("Tool/Frame Match/Region Is Anchor")->GetBool();
 	wxString mode_label;
 	if (engine_mode == 0) mode_label = to_wx("智能双模");
 	else if (engine_mode == 1) mode_label = to_wx("深度学习笔画检测");
@@ -897,7 +936,7 @@ void VisualToolTimingRegion::MatchCurrentLine(agi::Context *context) {
 	MaskCache cache;
 
 	bool ok = MatchLineToRegion(context, line, region, reference_frame, new_start, new_end,
-		minimum_similarity, -1, -1, on_sample_pump, &status, &cache, -1, &engine_used, true);
+		minimum_similarity, -1, -1, on_sample_pump, &status, &cache, -1, &engine_used, is_anchor_mode);
 
 	if ((!ok || status == kMatchNoPattern) && line->End > line->Start) {
 		int mid_time = static_cast<int>(line->Start + (line->End - line->Start) / 2);
@@ -905,7 +944,7 @@ void VisualToolTimingRegion::MatchCurrentLine(agi::Context *context) {
 		if (mid_frame != reference_frame) {
 			MaskCache retry_cache;
 			ok = MatchLineToRegion(context, line, region, mid_frame, new_start, new_end,
-				minimum_similarity, -1, -1, on_sample_pump, &status, &retry_cache, -1, &engine_used, true);
+				minimum_similarity, -1, -1, on_sample_pump, &status, &retry_cache, -1, &engine_used, is_anchor_mode);
 		}
 	}
 
@@ -980,11 +1019,13 @@ void VisualToolTimingRegion::OnMouseEvent(wxMouseEvent &event) {
 				OPT_SET("Tool/Frame Match/Region Y0")->SetDouble(std::clamp((ay - ah / 2.0) / script_res.Y(), 0.0, 1.0));
 				OPT_SET("Tool/Frame Match/Region X1")->SetDouble(std::clamp((ax + half_w) / script_res.X(), 0.0, 1.0));
 				OPT_SET("Tool/Frame Match/Region Y1")->SetDouble(std::clamp((ay + ah / 2.0) / script_res.Y(), 0.0, 1.0));
+				OPT_SET("Tool/Frame Match/Region Is Anchor")->SetBool(true);
 			} else {
 				OPT_SET("Tool/Frame Match/Region X0")->SetDouble(std::clamp<double>(std::min(start.X(), end.X()) / script_res.X(), 0.0, 1.0));
 				OPT_SET("Tool/Frame Match/Region Y0")->SetDouble(std::clamp<double>(std::min(start.Y(), end.Y()) / script_res.Y(), 0.0, 1.0));
 				OPT_SET("Tool/Frame Match/Region X1")->SetDouble(std::clamp<double>(std::max(start.X(), end.X()) / script_res.X(), 0.0, 1.0));
 				OPT_SET("Tool/Frame Match/Region Y1")->SetDouble(std::clamp<double>(std::max(start.Y(), end.Y()) / script_res.Y(), 0.0, 1.0));
+				OPT_SET("Tool/Frame Match/Region Is Anchor")->SetBool(false);
 			}
 		}
 		DetectInterval();
