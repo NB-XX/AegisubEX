@@ -48,6 +48,7 @@
 #include "options.h"
 #include "placeholder_ctrl.h"
 #include "project.h"
+#include "background_task_manager.h"
 #include "selection_controller.h"
 #include "subs_edit_ctrl.h"
 #include "text_selection_controller.h"
@@ -240,6 +241,12 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 		context->project->AddTimecodesListener(&SubsEditBox::UpdateFrameTiming, this),
 		context->selectionController->AddActiveLineListener(&SubsEditBox::OnActiveLineChanged, this),
 		context->selectionController->AddSelectionListener(&SubsEditBox::OnSelectedSetChanged, this),
+		context->bgTasks->AddLockStateListener([this] {
+			bool was_disabled = !controls_enabled;
+			SetControlsState(line && (!c->bgTasks || !c->bgTasks->IsLineLocked(line)));
+			if (was_disabled && controls_enabled && line)
+				UpdateFields(AssFile::COMMIT_DIAG_FULL, false);
+		}),
 		context->videoController->AddReviewModeListener(&SubsEditBox::OnReviewModeChanged, this),
 		context->initialLineState->AddChangeListener(&SubsEditBox::OnLineInitialTextChanged, this),
 	 });
@@ -413,6 +420,7 @@ void SubsEditBox::OnActiveLineChanged(AssDialogue *new_line) {
 	line = new_line;
 	commit_id = -1;
 
+	SetControlsState(line && (!c->bgTasks || !c->bgTasks->IsLineLocked(line)));
 	UpdateFields(AssFile::COMMIT_DIAG_FULL, false);
 }
 
@@ -499,8 +507,15 @@ void SubsEditBox::Commit(wxString const& desc, int type, bool amend, AssDialogue
 template<class setter>
 void SubsEditBox::SetSelectedRows(setter set, wxString const& desc, int type, bool amend) {
 	auto const& sel = c->selectionController->GetSelectedSet();
-	for_each(sel.begin(), sel.end(), set);
-	Commit(desc, type, amend, sel.size() == 1 ? *sel.begin() : nullptr);
+	std::vector<AssDialogue*> editable;
+	editable.reserve(sel.size());
+	for (AssDialogue *d : sel) {
+		if (!c->bgTasks || !c->bgTasks->IsLineLocked(d))
+			editable.push_back(d);
+	}
+	if (editable.empty()) return;
+	for_each(editable.begin(), editable.end(), set);
+	Commit(desc, type, amend, editable.size() == 1 ? editable.front() : nullptr);
 }
 
 template<class T>
@@ -520,8 +535,17 @@ void SubsEditBox::CommitText(wxString const& desc) {
 }
 
 void SubsEditBox::CommitTimes(TimeField field) {
+	if (!line || (c->bgTasks && c->bgTasks->IsLineLocked(line))) return;
 	auto const& sel = c->selectionController->GetSelectedSet();
+	std::vector<AssDialogue*> editable;
+	editable.reserve(sel.size());
 	for (AssDialogue *d : sel) {
+		if (!c->bgTasks || !c->bgTasks->IsLineLocked(d))
+			editable.push_back(d);
+	}
+	if (editable.empty()) return;
+
+	for (AssDialogue *d : editable) {
 		if (!initial_times.count(d))
 			initial_times[d] = {d->Start, d->End};
 
@@ -559,7 +583,7 @@ void SubsEditBox::CommitTimes(TimeField field) {
 
 	last_time_commit_type = field;
 	file_changed_slot.Block();
-	commit_id = c->ass->Commit(_("modify times"), AssFile::COMMIT_DIAG_TIME, commit_id, sel.size() == 1 ? *sel.begin() : nullptr);
+	commit_id = c->ass->Commit(_("modify times"), AssFile::COMMIT_DIAG_TIME, commit_id, editable.size() == 1 ? editable.front() : nullptr);
 	file_changed_slot.Unblock();
 }
 
@@ -609,6 +633,8 @@ void SubsEditBox::OnFrameTimeRadio(wxCommandEvent &event) {
 }
 
 void SubsEditBox::SetControlsState(bool state) {
+	if (state && (!line || (c->bgTasks && c->bgTasks->IsLineLocked(line))))
+		state = false;
 	if (state == controls_enabled) return;
 	controls_enabled = state;
 

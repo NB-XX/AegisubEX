@@ -42,6 +42,7 @@
 #include "async_video_provider.h"
 #include "audio_controller.h"
 #include "audio_box.h"
+#include "background_task_manager.h"
 #include "base_grid.h"
 #include "ai_assistant.h"
 #include "selection_controller.h"
@@ -65,10 +66,15 @@
 #include <libaegisub/dispatch.h>
 #include <libaegisub/log.h>
 
+#include <wx/button.h>
 #include <wx/dnd.h>
+#include <wx/gauge.h>
 #include <wx/msgdlg.h>
+#include <wx/panel.h>
 #include <wx/sizer.h>
 #include <wx/statline.h>
+#include <wx/stattext.h>
+#include <wx/statusbr.h>
 #include <wx/sysopt.h>
 #include <wx/toolbar.h>
 
@@ -137,6 +143,33 @@ FrameMain::FrameMain()
 
 	StartupLog("Create status bar");
 	CreateStatusBar(2);
+	if (wxStatusBar *sb = GetStatusBar()) {
+		bgTaskBar = new wxPanel(sb, wxID_ANY);
+		bgTaskBar->SetBackgroundColour(sb->GetBackgroundColour());
+		auto *task_sizer = new wxBoxSizer(wxHORIZONTAL);
+		bgTaskLabel = new wxStaticText(bgTaskBar, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END | wxST_NO_AUTORESIZE);
+		bgTaskGauge = new wxGauge(bgTaskBar, wxID_ANY, 100, wxDefaultPosition, wxSize(FromDIP(90), FromDIP(14)), wxGA_HORIZONTAL | wxGA_SMOOTH);
+		bgTaskStopBtn = new wxButton(bgTaskBar, wxID_ANY, to_wx("停止"), wxDefaultPosition, wxSize(FromDIP(42), FromDIP(18)), wxBU_EXACTFIT);
+		task_sizer->Add(bgTaskLabel, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(4));
+		task_sizer->Add(bgTaskGauge, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(6));
+		task_sizer->Add(bgTaskStopBtn, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, FromDIP(4));
+		bgTaskBar->SetSizer(task_sizer);
+		bgTaskBar->Hide();
+
+		bgTaskStopBtn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+			if (context && context->bgTasks)
+				context->bgTasks->CancelAll();
+		});
+		sb->Bind(wxEVT_SIZE, [this](wxSizeEvent& evt) {
+			LayoutBackgroundTaskBar();
+			evt.Skip();
+		});
+		BindConnection(context->bgTasks->AddTaskProgressListener(&FrameMain::UpdateBackgroundTaskBar, this));
+		BindConnection(context->project->AddVideoProviderListener([this](AsyncVideoProvider*) {
+			if (context && context->bgTasks && context->bgTasks->HasActiveTasks())
+				context->bgTasks->CancelAllAndJoin();
+		}));
+	}
 
 	StartupLog("Set icon");
 #ifdef _WIN32
@@ -183,6 +216,8 @@ FrameMain::FrameMain()
 FrameMain::~FrameMain () {
 	wxEvtHandler::RemoveFilter(this);
 	context->aiPanel = nullptr;
+	if (context->bgTasks)
+		context->bgTasks->CancelAllAndJoin();
 	// Restore the provider's normal subtitle source before either it or the
 	// controls which observe playback are torn down.
 	context->videoController->Stop();
@@ -360,6 +395,9 @@ void FrameMain::OnCloseWindow(wxCloseEvent &event) {
 		return;
 	}
 
+	if (context->bgTasks)
+		context->bgTasks->CancelAllAndJoin();
+
 	context->dialog.reset();
 
 	// Store maximization state
@@ -372,6 +410,58 @@ void FrameMain::OnStatusClear(wxTimerEvent &) {
 	SetStatusText("",1);
 }
 
+void FrameMain::LayoutBackgroundTaskBar() {
+	wxStatusBar *sb = GetStatusBar();
+	if (!sb || !bgTaskBar || !bgTaskBar->IsShown() || sb->GetFieldsCount() < 3) return;
+	wxRect rect;
+	if (sb->GetFieldRect(2, rect)) {
+		int w = rect.width > 4 ? rect.width - 4 : 0;
+		int h = rect.height > 2 ? rect.height - 2 : 0;
+		bgTaskBar->SetSize(rect.x + 2, rect.y + 1, w, h);
+		bgTaskBar->Layout();
+	}
+}
+
+void FrameMain::UpdateBackgroundTaskBar(bool active, int done, int total, wxString const& text) {
+	wxStatusBar *sb = GetStatusBar();
+	if (!sb || !bgTaskBar) return;
+
+	if (!active) {
+		bgTaskBar->Hide();
+		if (sb->GetFieldsCount() != 2) {
+			sb->SetFieldsCount(2);
+			int widths[] = {-1, -1};
+			sb->SetStatusWidths(2, widths);
+		}
+		return;
+	}
+
+	if (sb->GetFieldsCount() != 3) {
+		sb->SetFieldsCount(3);
+	}
+	int widths[] = {-1, -1, FromDIP(340)};
+	sb->SetStatusWidths(3, widths);
+
+	if (bgTaskLabel && bgTaskLabel->GetLabel() != text) {
+		bgTaskLabel->SetLabel(text);
+	}
+	if (bgTaskGauge) {
+		if (total <= 0) {
+			bgTaskGauge->Pulse();
+		} else {
+			if (bgTaskGauge->GetRange() != total)
+				bgTaskGauge->SetRange(total);
+			int clamped = done < 0 ? 0 : (done > total ? total : done);
+			bgTaskGauge->SetValue(clamped);
+		}
+	}
+
+	if (!bgTaskBar->IsShown()) {
+		bgTaskBar->Show();
+	}
+	LayoutBackgroundTaskBar();
+}
+
 void FrameMain::OnAudioOpen(agi::AudioProvider *provider) {
 	if (provider)
 		SetDisplayMode(-1, 1);
@@ -380,6 +470,8 @@ void FrameMain::OnAudioOpen(agi::AudioProvider *provider) {
 }
 
 void FrameMain::OnSubtitlesOpen() {
+	if (context && context->bgTasks && context->bgTasks->HasActiveTasks())
+		context->bgTasks->CancelAllAndJoin();
 	UpdateTitle();
 	SetDisplayMode(1, 1);
 }

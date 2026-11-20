@@ -42,6 +42,10 @@ class AudioBox;
 class VideoBox;
 class AIResultPanel;
 class ReviewFilterBar;
+class wxButton;
+class wxGauge;
+class wxPanel;
+class wxStaticText;
 namespace agi { class AudioProvider; }
 namespace agi { struct Context; class OptionValue; }
 
@@ -83,6 +87,14 @@ class FrameMain : public wxFrame, private agi::signal::ConnectionScope, public w
 	AIResultPanel *aiPanel = nullptr; ///< AI result panel (bottom-right)
 	ReviewFilterBar *reviewFilterBar = nullptr;
 	wxSizer *BottomSizer = nullptr;
+
+	wxPanel *bgTaskBar = nullptr;
+	wxStaticText *bgTaskLabel = nullptr;
+	wxGauge *bgTaskGauge = nullptr;
+	wxButton *bgTaskStopBtn = nullptr;
+
+	void LayoutBackgroundTaskBar();
+	void UpdateBackgroundTaskBar(bool active, int done, int total, wxString const& text);
 
 	wxSizer *MainSizer = nullptr;  ///< Arranges things from top to bottom in the window
 	wxSizer *TopSizer;   ///< Arranges video box and tool box from left to right

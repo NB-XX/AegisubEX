@@ -23,14 +23,26 @@
 
 #include <algorithm>
 
+#include "background_task_manager.h"
+
 SelectionController::SelectionController(agi::Context *c) : context(c) { }
 
 void SelectionController::SetSelectedSet(Selection new_selection) {
+	if (context && context->bgTasks) {
+		for (auto it = new_selection.begin(); it != new_selection.end(); ) {
+			if (context->bgTasks->IsLineLocked(*it))
+				it = new_selection.erase(it);
+			else
+				++it;
+		}
+	}
 	selection = std::move(new_selection);
 	AnnounceSelectedSetChanged();
 }
 
 void SelectionController::SetActiveLine(AssDialogue *new_line) {
+	if (new_line && context && context->bgTasks && context->bgTasks->IsLineLocked(new_line))
+		return;
 	if (new_line != active_line) {
 		active_line = new_line;
 		if (active_line)
@@ -40,6 +52,28 @@ void SelectionController::SetActiveLine(AssDialogue *new_line) {
 }
 
 void SelectionController::SetSelectionAndActive(Selection new_selection, AssDialogue *new_line) {
+	if (context && context->bgTasks) {
+		for (auto it = new_selection.begin(); it != new_selection.end(); ) {
+			if (context->bgTasks->IsLineLocked(*it))
+				it = new_selection.erase(it);
+			else
+				++it;
+		}
+		if (new_line && context->bgTasks->IsLineLocked(new_line)) {
+			new_line = nullptr;
+			if (!new_selection.empty() && context->ass) {
+				for (auto& diag : context->ass->Events) {
+					if (new_selection.count(&diag)) {
+						new_line = &diag;
+						break;
+					}
+				}
+			}
+			if (!new_line && active_line && !context->bgTasks->IsLineLocked(active_line)) {
+				new_line = active_line;
+			}
+		}
+	}
 	bool active_line_changed = new_line != active_line;
 	selection = std::move(new_selection);
 	active_line = new_line;
@@ -60,15 +94,22 @@ std::vector<AssDialogue *> SelectionController::GetSortedSelection() const {
 void SelectionController::PrevLine() {
 	if (!active_line) return;
 	auto it = context->ass->iterator_to(*active_line);
-	if (it != context->ass->Events.begin()) {
+	while (it != context->ass->Events.begin()) {
 		--it;
-		SetSelectionAndActive({&*it}, &*it);
+		if (!context->bgTasks || !context->bgTasks->IsLineLocked(&*it)) {
+			SetSelectionAndActive({&*it}, &*it);
+			return;
+		}
 	}
 }
 
 void SelectionController::NextLine() {
 	if (!active_line) return;
 	auto it = context->ass->iterator_to(*active_line);
-	if (++it != context->ass->Events.end())
-		SetSelectionAndActive({&*it}, &*it);
+	while (++it != context->ass->Events.end()) {
+		if (!context->bgTasks || !context->bgTasks->IsLineLocked(&*it)) {
+			SetSelectionAndActive({&*it}, &*it);
+			return;
+		}
+	}
 }

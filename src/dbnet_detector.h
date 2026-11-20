@@ -2,6 +2,8 @@
 
 #include "onnxruntime_c_api.h"
 #include <windows.h>
+#include <atomic>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -27,9 +29,10 @@ private:
 	OrtSessionOptions* session_options = nullptr;
 	OrtSession* session = nullptr;
 	OrtMemoryInfo* memory_info = nullptr;
-	bool available = false;
+	std::atomic<bool> available{false};
 	bool is_gpu = false;
 
+	mutable std::mutex infer_mutex;
 	std::vector<float> input_tensor_cache;
 
 	DBNetDetector() {
@@ -84,6 +87,7 @@ public:
 	}
 
 	bool Init() {
+		std::lock_guard<std::mutex> lock(infer_mutex);
 		if (available) return true;
 
 		wchar_t exe_buf[MAX_PATH] = {0};
@@ -215,6 +219,7 @@ public:
 	}
 
 	void Shutdown() {
+		std::lock_guard<std::mutex> lock(infer_mutex);
 		if (session && ort) ort->ReleaseSession(session);
 		if (session_options && ort) ort->ReleaseSessionOptions(session_options);
 		if (memory_info && ort) ort->ReleaseMemoryInfo(memory_info);
@@ -233,6 +238,7 @@ public:
 	// 极速单帧文字笔画概率检测
 	DBNetResult Detect(const uint8_t* frame_data, int frame_w, int frame_h, int frame_pitch, bool flipped,
 	                   int x0, int y0, int x1, int y1) {
+		std::lock_guard<std::mutex> lock(infer_mutex);
 		DBNetResult res;
 		if (!available || !ort || !session) return res;
 
@@ -336,6 +342,7 @@ public:
 	bool GetTextBoundingBox(const uint8_t* frame_data, int frame_w, int frame_h, int frame_pitch, bool flipped,
 	                        int x0, int y0, int x1, int y1,
 	                        int& out_x0, int& out_y0, int& out_x1, int& out_y1) {
+		std::lock_guard<std::mutex> lock(infer_mutex);
 		if (!available || !ort || !session) return false;
 
 		int crop_w = x1 - x0;
@@ -455,6 +462,7 @@ public:
 	bool FindAnchorSubtitleBox(const uint8_t* frame_data, int frame_w, int frame_h, int frame_pitch, bool flipped,
 	                           int anchor_x, int anchor_y, int anchor_h,
 	                           int& out_x0, int& out_y0, int& out_x1, int& out_y1) {
+		std::lock_guard<std::mutex> lock(infer_mutex);
 		if (!available || !ort || !session) return false;
 		if (frame_w <= 0 || frame_h <= 0 || anchor_h < 8) return false;
 

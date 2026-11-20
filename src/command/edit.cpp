@@ -35,6 +35,7 @@
 #include "../ass_file.h"
 #include "../ass_karaoke.h"
 #include "../ass_style.h"
+#include "../background_task_manager.h"
 #include "../compat.h"
 #include "../dialog_search_replace.h"
 #include "../dialogs.h"
@@ -592,6 +593,7 @@ static void delete_lines(agi::Context *c, wxString const& commit_message) {
 	}
 
 	auto is_being_deleted = [&](const AssDialogue* d) {
+		if (c->bgTasks && c->bgTasks->IsLineLocked(d)) return false;
 		if (sel.count(const_cast<AssDialogue*>(d))) return true;
 		if (!deleted_groups.empty()) {
 			std::string const& eff = d->Effect.get();
@@ -610,6 +612,8 @@ static void delete_lines(agi::Context *c, wxString const& commit_message) {
 	for (auto& diag : c->ass->Events) {
 		if (is_being_deleted(&diag))
 			hit_selection = true;
+		else if (c->bgTasks && c->bgTasks->IsLineLocked(&diag))
+			continue;
 		else if (hit_selection && !post_sel) {
 			post_sel = &diag;
 			break;
@@ -628,6 +632,7 @@ static void delete_lines(agi::Context *c, wxString const& commit_message) {
 	}, [&](AssDialogue *e) {
 		to_delete.emplace_back(e);
 	});
+	if (to_delete.empty()) return;
 
 	AssDialogue *new_active = post_sel;
 	if (!new_active)

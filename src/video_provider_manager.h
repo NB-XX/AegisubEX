@@ -25,6 +25,15 @@
 class VideoProvider;
 namespace agi { class BackgroundRunner; }
 
+struct WorkerVideoOptions {
+	int ffms_threads = 2;
+	bool ffms_unsafe_seeking = false;
+	agi::fs::path ffms_cache_file;
+};
+
+WorkerVideoOptions SnapshotWorkerVideoOptions(agi::fs::path const& video_file);
+std::unique_ptr<VideoProvider> CreateFFmpegSourceWorkerProvider(agi::fs::path const& video_file, agi::ycbcr::Header colormatrix, WorkerVideoOptions const& opts);
+
 struct VideoProviderFactory {
 	static std::vector<std::string> GetClasses();
 	static std::vector<std::string> GetFileExtensions();

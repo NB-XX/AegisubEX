@@ -21,6 +21,7 @@
 #include "async_video_provider.h"
 #include "audio_controller.h"
 #include "audio_provider_factory.h"
+#include "background_task_manager.h"
 #include "base_grid.h"
 #include "charset_detect.h"
 #include "audio_provider_factory.h"
@@ -469,6 +470,9 @@ void Project::CloseAudio() {
 }
 
 bool Project::DoLoadVideo(agi::fs::path const& path) {
+	if (context && context->bgTasks && context->bgTasks->HasActiveTasks())
+		context->bgTasks->CancelAllAndJoin();
+
 	if (!progress)
 		progress = new DialogProgress(context->parent);
 

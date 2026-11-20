@@ -11,6 +11,7 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "async_video_provider.h"
+#include "compat.h"
 #include "include/aegisub/context.h"
 #include "project.h"
 #include "selection_controller.h"
@@ -27,8 +28,10 @@
 #include <iomanip>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace MotionTrack {
@@ -64,140 +67,403 @@ struct MotionTrajectory {
 	double fps = 24.0;
 };
 
+struct MotionVideoView {
+	int frame_count = 0;
+	int native_width = 0;
+	int native_height = 0;
+	double fps = 24.0;
+	std::function<std::shared_ptr<const VideoFrame>(int frame_no)> get_frame;
+};
+
 // --------------------------------------------------------------------------
-// 1. 图像采样与归一化互相关 (NCC) 匹配
+// 1. 连续灰度图像与三层金字塔零均值 NCC 匹配 (Multi-Scale Pyramid NCC)
 // --------------------------------------------------------------------------
 
-inline uint8_t GetPixelGray(const VideoFrame& f, int x, int y) {
-	x = std::clamp(x, 0, f.width - 1);
-	y = std::clamp(y, 0, f.height - 1);
-	int row = f.flipped ? (f.height - 1 - y) : y;
-	const uint8_t* p = f.data.data() + static_cast<size_t>(row) * f.pitch + static_cast<size_t>(x) * 4;
-	// p[0]=B, p[1]=G, p[2]=R, p[3]=A
-	return static_cast<uint8_t>((p[2] * 77 + p[1] * 150 + p[0] * 29) >> 8);
-}
-
-struct GrayPatch {
+struct GrayImage {
 	int w = 0;
 	int h = 0;
-	std::vector<float> data; // Zero-mean data
-	float norm = 1.0f;       // sqrt(sum(data^2))
+	std::vector<uint8_t> data;
+};
 
-	void Extract(const VideoFrame& f, int x0, int y0, int pw, int ph) {
-		w = pw;
-		h = ph;
-		size_t n = static_cast<size_t>(w * h);
-		data.resize(n);
-		float sum = 0.0f;
-		for (int y = 0; y < h; ++y) {
-			for (int x = 0; x < w; ++x) {
-				float val = static_cast<float>(GetPixelGray(f, x0 + x, y0 + y));
-				data[y * w + x] = val;
-				sum += val;
-			}
+inline GrayImage BuildGrayImage(const VideoFrame& f) {
+	GrayImage img;
+	if (f.width <= 0 || f.height <= 0 || f.data.empty()) return img;
+	img.w = f.width;
+	img.h = f.height;
+	img.data.resize(static_cast<size_t>(img.w) * img.h);
+	for (int y = 0; y < img.h; ++y) {
+		int src_row = f.flipped ? (img.h - 1 - y) : y;
+		const uint8_t* src = f.data.data() + static_cast<size_t>(src_row) * f.pitch;
+		uint8_t* dst = img.data.data() + static_cast<size_t>(y) * img.w;
+		for (int x = 0; x < img.w; ++x) {
+			const uint8_t* p = src + static_cast<size_t>(x) * 4;
+			dst[x] = static_cast<uint8_t>((p[2] * 77 + p[1] * 150 + p[0] * 29) >> 8);
 		}
-		float mean = (n > 0) ? (sum / n) : 0.0f;
-		float var_sum = 0.0f;
+	}
+	return img;
+}
+
+inline GrayImage Downsample2x(const GrayImage& src) {
+	GrayImage dst;
+	int dw = src.w / 2;
+	int dh = src.h / 2;
+	if (dw < 2 || dh < 2 || src.data.empty()) return dst;
+	dst.w = dw;
+	dst.h = dh;
+	dst.data.resize(static_cast<size_t>(dw) * dh);
+	for (int y = 0; y < dh; ++y) {
+		const uint8_t* r0 = src.data.data() + static_cast<size_t>(y * 2) * src.w;
+		const uint8_t* r1 = src.data.data() + static_cast<size_t>(y * 2 + 1) * src.w;
+		uint8_t* out = dst.data.data() + static_cast<size_t>(y) * dw;
+		for (int x = 0; x < dw; ++x) {
+			int ix = x * 2;
+			out[x] = static_cast<uint8_t>((r0[ix] + r0[ix + 1] + r1[ix] + r1[ix + 1] + 2) >> 2);
+		}
+	}
+	return dst;
+}
+
+struct ZeroMeanTemplate {
+	int w = 0;
+	int h = 0;
+	std::vector<float> data;
+	float inv_norm = 1.0f;
+	float inv_n = 1.0f;
+
+	void FinalizeZeroMean() {
+		size_t n = data.size();
+		if (n == 0) {
+			inv_n = 1.0f;
+			inv_norm = 1.0f;
+			return;
+		}
+		inv_n = 1.0f / static_cast<float>(n);
+		double sum = 0.0;
+		for (float v : data) sum += v;
+		float mean = static_cast<float>(sum / static_cast<double>(n));
+		double var_sum = 0.0;
 		for (size_t i = 0; i < n; ++i) {
 			data[i] -= mean;
-			var_sum += data[i] * data[i];
+			var_sum += static_cast<double>(data[i]) * data[i];
 		}
-		norm = std::sqrt(std::max(1e-4f, var_sum));
+		inv_norm = static_cast<float>(1.0 / std::sqrt(std::max(1e-4, var_sum)));
+	}
+
+	void ExtractFromGray(const GrayImage& img, int x0, int y0, int pw, int ph) {
+		w = pw;
+		h = ph;
+		size_t n = static_cast<size_t>(w) * h;
+		data.resize(n);
+		if (n == 0 || img.data.empty()) {
+			FinalizeZeroMean();
+			return;
+		}
+		bool inside = (x0 >= 0 && y0 >= 0 && x0 + pw <= img.w && y0 + ph <= img.h);
+		if (inside) {
+			for (int y = 0; y < h; ++y) {
+				const uint8_t* row = img.data.data() + static_cast<size_t>(y0 + y) * img.w + x0;
+				float* dst = data.data() + static_cast<size_t>(y) * w;
+				for (int x = 0; x < w; ++x)
+					dst[x] = static_cast<float>(row[x]);
+			}
+		} else {
+			for (int y = 0; y < h; ++y) {
+				int sy = std::clamp(y0 + y, 0, img.h - 1);
+				const uint8_t* row = img.data.data() + static_cast<size_t>(sy) * img.w;
+				float* dst = data.data() + static_cast<size_t>(y) * w;
+				for (int x = 0; x < w; ++x) {
+					int sx = std::clamp(x0 + x, 0, img.w - 1);
+					dst[x] = static_cast<float>(row[sx]);
+				}
+			}
+		}
+		FinalizeZeroMean();
+	}
+
+	void BlendEMA(const ZeroMeanTemplate& cand, float alpha) {
+		if (cand.data.size() != data.size() || data.empty()) return;
+		float keep = 1.0f - alpha;
+		for (size_t i = 0; i < data.size(); ++i)
+			data[i] = data[i] * keep + cand.data[i] * alpha;
+		FinalizeZeroMean();
 	}
 };
 
-inline float ComputeNCC(const GrayPatch& p1, const GrayPatch& p2) {
-	if (p1.data.size() != p2.data.size() || p1.data.empty()) return -1.0f;
-	float dot = 0.0f;
-	size_t n = p1.data.size();
-	const float* d1 = p1.data.data();
-	const float* d2 = p2.data.data();
-	for (size_t i = 0; i < n; ++i) {
-		dot += d1[i] * d2[i];
+inline float EvalDualNCC(
+	const GrayImage& img,
+	int x0, int y0,
+	const ZeroMeanTemplate& t_curr,
+	const ZeroMeanTemplate& t_init,
+	float w_curr, float w_init)
+{
+	int w = t_curr.w;
+	int h = t_curr.h;
+	if (w <= 0 || h <= 0 || img.data.empty()) return -1.0f;
+
+	const float* tc = t_curr.data.data();
+	const float* ti = t_init.data.data();
+	uint64_t sum_c = 0;
+	uint64_t sum_sq = 0;
+	double dot_curr = 0.0;
+	double dot_init = 0.0;
+
+	if (x0 >= 0 && y0 >= 0 && x0 + w <= img.w && y0 + h <= img.h) {
+		for (int y = 0; y < h; ++y) {
+			const uint8_t* row = img.data.data() + static_cast<size_t>(y0 + y) * img.w + x0;
+			const float* tc_row = tc + static_cast<size_t>(y) * w;
+			const float* ti_row = ti + static_cast<size_t>(y) * w;
+			for (int x = 0; x < w; ++x) {
+				uint32_t c = row[x];
+				sum_c += c;
+				sum_sq += c * c;
+				float fc = static_cast<float>(c);
+				dot_curr += fc * tc_row[x];
+				dot_init += fc * ti_row[x];
+			}
+		}
+	} else {
+		for (int y = 0; y < h; ++y) {
+			int sy = std::clamp(y0 + y, 0, img.h - 1);
+			const uint8_t* row = img.data.data() + static_cast<size_t>(sy) * img.w;
+			const float* tc_row = tc + static_cast<size_t>(y) * w;
+			const float* ti_row = ti + static_cast<size_t>(y) * w;
+			for (int x = 0; x < w; ++x) {
+				int sx = std::clamp(x0 + x, 0, img.w - 1);
+				uint32_t c = row[sx];
+				sum_c += c;
+				sum_sq += c * c;
+				float fc = static_cast<float>(c);
+				dot_curr += fc * tc_row[x];
+				dot_init += fc * ti_row[x];
+			}
+		}
 	}
-	return dot / (p1.norm * p2.norm);
+
+	double var_c = std::max(1e-4, static_cast<double>(sum_sq) - static_cast<double>(sum_c) * static_cast<double>(sum_c) * t_curr.inv_n);
+	double inv_norm_c = 1.0 / std::sqrt(var_c);
+	double s_curr = dot_curr * inv_norm_c * t_curr.inv_norm;
+	double s_init = dot_init * inv_norm_c * t_init.inv_norm;
+	return static_cast<float>(w_curr * s_curr + w_init * s_init);
+}
+
+struct GrayPyramid {
+	GrayImage l0, l1, l2;
+	bool has_l1 = false;
+	bool has_l2 = false;
+};
+
+struct TemplatePyramid {
+	ZeroMeanTemplate l0, l1, l2;
+	bool has_l1 = false;
+	bool has_l2 = false;
+};
+
+inline GrayPyramid BuildGrayPyramid(GrayImage l0, bool need_l1, bool need_l2) {
+	GrayPyramid pyr;
+	pyr.l0 = std::move(l0);
+	if (need_l1) {
+		pyr.l1 = Downsample2x(pyr.l0);
+		pyr.has_l1 = !pyr.l1.data.empty();
+	}
+	if (need_l2 && pyr.has_l1) {
+		pyr.l2 = Downsample2x(pyr.l1);
+		pyr.has_l2 = !pyr.l2.data.empty();
+	}
+	return pyr;
+}
+
+inline TemplatePyramid BuildTemplatePyramid(const GrayPyramid& ref_pyr, int box_x0, int box_y0, int box_w, int box_h) {
+	TemplatePyramid tp;
+	tp.l0.ExtractFromGray(ref_pyr.l0, box_x0, box_y0, box_w, box_h);
+	if (ref_pyr.has_l1 && box_w >= 24 && box_h >= 12) {
+		tp.l1.ExtractFromGray(ref_pyr.l1, box_x0 / 2, box_y0 / 2, box_w / 2, box_h / 2);
+		tp.has_l1 = (tp.l1.w >= 4 && tp.l1.h >= 4);
+	}
+	if (tp.has_l1 && ref_pyr.has_l2 && (box_w / 2) >= 24 && (box_h / 2) >= 12) {
+		tp.l2.ExtractFromGray(ref_pyr.l2, box_x0 / 4, box_y0 / 4, box_w / 4, box_h / 4);
+		tp.has_l2 = (tp.l2.w >= 4 && tp.l2.h >= 4);
+	}
+	return tp;
+}
+
+struct PeakCand {
+	int dx = 0;
+	int dy = 0;
+	float score = -2.0f;
+};
+
+inline void SearchLevelGrid(
+	const GrayImage& img,
+	const ZeroMeanTemplate& t_curr,
+	const ZeroMeanTemplate& t_init,
+	int base_x0, int base_y0,
+	int radius,
+	float w_curr, float w_init,
+	std::vector<PeakCand>& out)
+{
+	int cols = 2 * radius + 1;
+	int rows = 2 * radius + 1;
+	out.resize(static_cast<size_t>(cols) * rows);
+
+	auto eval_rows = [&](int row_begin, int row_end) {
+		for (int ry = row_begin; ry < row_end; ++ry) {
+			int dy = ry - radius;
+			size_t row_off = static_cast<size_t>(ry) * cols;
+			for (int rx = 0; rx < cols; ++rx) {
+				int dx = rx - radius;
+				float sc = EvalDualNCC(img, base_x0 + dx, base_y0 + dy, t_curr, t_init, w_curr, w_init);
+				out[row_off + rx] = PeakCand{dx, dy, sc};
+			}
+		}
+	};
+
+	if (cols * rows >= 625 && rows >= 8) {
+		int hw = static_cast<int>(std::thread::hardware_concurrency());
+		int n_threads = std::clamp(hw > 0 ? hw : 4, 2, 4);
+		std::vector<std::thread> threads;
+		threads.reserve(n_threads - 1);
+		int chunk = (rows + n_threads - 1) / n_threads;
+		for (int t = 1; t < n_threads; ++t) {
+			int rb = t * chunk;
+			int re = std::min(rows, rb + chunk);
+			if (rb < re) {
+				threads.emplace_back(eval_rows, rb, re);
+			}
+		}
+		eval_rows(0, std::min(rows, chunk));
+		for (auto& th : threads) {
+			if (th.joinable()) th.join();
+		}
+	} else {
+		eval_rows(0, rows);
+	}
+}
+
+inline std::vector<PeakCand> ExtractTopPeaks(std::vector<PeakCand> sorted, int min_dist, size_t max_k) {
+	std::sort(sorted.begin(), sorted.end(), [](PeakCand const& a, PeakCand const& b) {
+		return a.score > b.score;
+	});
+	std::vector<PeakCand> picked;
+	picked.reserve(max_k);
+	for (auto const& c : sorted) {
+		bool far_enough = true;
+		for (auto const& p : picked) {
+			if (std::abs(c.dx - p.dx) < min_dist && std::abs(c.dy - p.dy) < min_dist) {
+				far_enough = false;
+				break;
+			}
+		}
+		if (far_enough) {
+			picked.push_back(c);
+			if (picked.size() >= max_k) break;
+		}
+	}
+	return picked;
 }
 
 // --------------------------------------------------------------------------
-// 2. 多尺度搜索与亚像素抛物线拟合 (Sub-pixel Parabolic Refinement)
+// 2. 三层金字塔快速检索与亚像素抛物线拟合 (Sub-pixel Parabolic Refinement)
 // --------------------------------------------------------------------------
 
-inline TrackPoint MatchNextFrame(
-	const VideoFrame& f,
-	const GrayPatch& t_init,
-	GrayPatch& t_curr,
-	int box_w, int box_h,
+inline TrackPoint MatchNextFramePyramid(
+	const GrayPyramid& f_pyr,
+	const TemplatePyramid& t_init,
+	TemplatePyramid& t_curr,
 	double prev_center_x, double prev_center_y,
 	double vel_x, double vel_y,
 	int search_radius,
 	double alpha = 0.08)
 {
-	// 基于动量预测的初猜搜索中心
+	int box_w = t_init.l0.w;
+	int box_h = t_init.l0.h;
 	int center_x = static_cast<int>(std::round(prev_center_x + vel_x));
 	int center_y = static_cast<int>(std::round(prev_center_y + vel_y));
+	int pred_x0 = center_x - box_w / 2;
+	int pred_y0 = center_y - box_h / 2;
 
 	int best_dx = 0;
 	int best_dy = 0;
 	float best_score = -2.0f;
 
-	// 第一阶段：粗粒度粗筛 (步长 2)
-	int stride = (search_radius > 25) ? 2 : 1;
-	GrayPatch cand;
+	if (t_init.has_l2 && f_pyr.has_l2) {
+		int r2 = std::max(2, (search_radius + 3) / 4);
+		int pred2_x0 = static_cast<int>(std::round(pred_x0 / 4.0));
+		int pred2_y0 = static_cast<int>(std::round(pred_y0 / 4.0));
 
-	for (int dy = -search_radius; dy <= search_radius; dy += stride) {
-		for (int dx = -search_radius; dx <= search_radius; dx += stride) {
-			int cur_x0 = center_x + dx - box_w / 2;
-			int cur_y0 = center_y + dy - box_h / 2;
-			cand.Extract(f, cur_x0, cur_y0, box_w, box_h);
-			float s_curr = ComputeNCC(cand, t_curr);
-			float s_init = ComputeNCC(cand, t_init);
-			// 双模板融合：动态模板跟形变，初始模板锁原位防漂移
-			float score = 0.55f * s_curr + 0.45f * s_init;
-			if (score > best_score) {
-				best_score = score;
-				best_dx = dx;
-				best_dy = dy;
-			}
-		}
-	}
+		std::vector<PeakCand> l2_grid;
+		SearchLevelGrid(f_pyr.l2, t_curr.l2, t_init.l2, pred2_x0, pred2_y0, r2, 0.55f, 0.45f, l2_grid);
+		std::vector<PeakCand> top3 = ExtractTopPeaks(std::move(l2_grid), 2, 3);
 
-	// 第二阶段：在粗筛峰值周围 5x5 范围内以步长 1 进行精确定位
-	if (stride > 1) {
-		int r_fine = stride;
-		int fine_best_dx = best_dx;
-		int fine_best_dy = best_dy;
-		for (int dy = best_dy - r_fine; dy <= best_dy + r_fine; ++dy) {
-			for (int dx = best_dx - r_fine; dx <= best_dx + r_fine; ++dx) {
-				int cur_x0 = center_x + dx - box_w / 2;
-				int cur_y0 = center_y + dy - box_h / 2;
-				cand.Extract(f, cur_x0, cur_y0, box_w, box_h);
-				float s_curr = ComputeNCC(cand, t_curr);
-				float s_init = ComputeNCC(cand, t_init);
-				float score = 0.65f * s_curr + 0.35f * s_init;
-				if (score > best_score) {
-					best_score = score;
-					fine_best_dx = dx;
-					fine_best_dy = dy;
+		int pred1_x0 = static_cast<int>(std::round(pred_x0 / 2.0));
+		int pred1_y0 = static_cast<int>(std::round(pred_y0 / 2.0));
+		int best_dx1 = 0, best_dy1 = 0;
+		float best_s1 = -2.0f;
+
+		for (auto const& pk : top3) {
+			int c1x = pk.dx * 2;
+			int c1y = pk.dy * 2;
+			for (int dy1 = c1y - 3; dy1 <= c1y + 3; ++dy1) {
+				for (int dx1 = c1x - 3; dx1 <= c1x + 3; ++dx1) {
+					float sc = EvalDualNCC(f_pyr.l1, pred1_x0 + dx1, pred1_y0 + dy1, t_curr.l1, t_init.l1, 0.60f, 0.40f);
+					if (sc > best_s1) {
+						best_s1 = sc;
+						best_dx1 = dx1;
+						best_dy1 = dy1;
+					}
 				}
 			}
 		}
-		best_dx = fine_best_dx;
-		best_dy = fine_best_dy;
+
+		int c0x = best_dx1 * 2;
+		int c0y = best_dy1 * 2;
+		for (int dy = c0y - 2; dy <= c0y + 2; ++dy) {
+			for (int dx = c0x - 2; dx <= c0x + 2; ++dx) {
+				float sc = EvalDualNCC(f_pyr.l0, pred_x0 + dx, pred_y0 + dy, t_curr.l0, t_init.l0, 0.65f, 0.35f);
+				if (sc > best_score) {
+					best_score = sc;
+					best_dx = dx;
+					best_dy = dy;
+				}
+			}
+		}
+	} else if (t_init.has_l1 && f_pyr.has_l1) {
+		int r1 = std::max(2, (search_radius + 1) / 2);
+		int pred1_x0 = static_cast<int>(std::round(pred_x0 / 2.0));
+		int pred1_y0 = static_cast<int>(std::round(pred_y0 / 2.0));
+
+		std::vector<PeakCand> l1_grid;
+		SearchLevelGrid(f_pyr.l1, t_curr.l1, t_init.l1, pred1_x0, pred1_y0, r1, 0.55f, 0.45f, l1_grid);
+		std::vector<PeakCand> top1 = ExtractTopPeaks(std::move(l1_grid), 1, 1);
+		int c0x = top1.empty() ? 0 : top1[0].dx * 2;
+		int c0y = top1.empty() ? 0 : top1[0].dy * 2;
+
+		for (int dy = c0y - 2; dy <= c0y + 2; ++dy) {
+			for (int dx = c0x - 2; dx <= c0x + 2; ++dx) {
+				float sc = EvalDualNCC(f_pyr.l0, pred_x0 + dx, pred_y0 + dy, t_curr.l0, t_init.l0, 0.65f, 0.35f);
+				if (sc > best_score) {
+					best_score = sc;
+					best_dx = dx;
+					best_dy = dy;
+				}
+			}
+		}
+	} else {
+		std::vector<PeakCand> l0_grid;
+		SearchLevelGrid(f_pyr.l0, t_curr.l0, t_init.l0, pred_x0, pred_y0, search_radius, 0.60f, 0.40f, l0_grid);
+		std::vector<PeakCand> top1 = ExtractTopPeaks(std::move(l0_grid), 1, 1);
+		if (!top1.empty()) {
+			best_dx = top1[0].dx;
+			best_dy = top1[0].dy;
+			best_score = top1[0].score;
+		}
 	}
 
-	// 第三阶段：3x3 邻域亚像素抛物线拟合 (精确到 0.05 像素)
+	// 亚像素抛物线拟合 (精确到 0.05 像素)
 	float c00 = best_score;
-	cand.Extract(f, center_x + best_dx - 1 - box_w / 2, center_y + best_dy - box_h / 2, box_w, box_h);
-	float cx_minus = 0.65f * ComputeNCC(cand, t_curr) + 0.35f * ComputeNCC(cand, t_init);
-
-	cand.Extract(f, center_x + best_dx + 1 - box_w / 2, center_y + best_dy - box_h / 2, box_w, box_h);
-	float cx_plus = 0.65f * ComputeNCC(cand, t_curr) + 0.35f * ComputeNCC(cand, t_init);
-
-	cand.Extract(f, center_x + best_dx - box_w / 2, center_y + best_dy - 1 - box_h / 2, box_w, box_h);
-	float cy_minus = 0.65f * ComputeNCC(cand, t_curr) + 0.35f * ComputeNCC(cand, t_init);
-
-	cand.Extract(f, center_x + best_dx - box_w / 2, center_y + best_dy + 1 - box_h / 2, box_w, box_h);
-	float cy_plus = 0.65f * ComputeNCC(cand, t_curr) + 0.35f * ComputeNCC(cand, t_init);
+	float cx_minus = EvalDualNCC(f_pyr.l0, pred_x0 + best_dx - 1, pred_y0 + best_dy, t_curr.l0, t_init.l0, 0.65f, 0.35f);
+	float cx_plus  = EvalDualNCC(f_pyr.l0, pred_x0 + best_dx + 1, pred_y0 + best_dy, t_curr.l0, t_init.l0, 0.65f, 0.35f);
+	float cy_minus = EvalDualNCC(f_pyr.l0, pred_x0 + best_dx, pred_y0 + best_dy - 1, t_curr.l0, t_init.l0, 0.65f, 0.35f);
+	float cy_plus  = EvalDualNCC(f_pyr.l0, pred_x0 + best_dx, pred_y0 + best_dy + 1, t_curr.l0, t_init.l0, 0.65f, 0.35f);
 
 	double denom_x = 2.0 * (2.0 * c00 - cx_plus - cx_minus);
 	double sub_dx = (std::abs(denom_x) > 1e-4) ? ((cx_plus - cx_minus) / denom_x) : 0.0;
@@ -213,15 +479,25 @@ inline TrackPoint MatchNextFrame(
 	pt.score = best_score;
 	pt.valid = (best_score >= 0.25f);
 
-	// 动态模板 EMA 平滑更新 (增加质量门禁，仅在高置信度时微调更新，防止把背景漂移学进模板)
+	// 动态模板 EMA 平滑更新 (增加质量门禁，防止把背景漂移学进模板)
 	if (pt.valid && pt.score >= 0.45f && alpha > 0.0) {
-		cand.Extract(f, static_cast<int>(std::round(pt.x - box_w / 2.0)), static_cast<int>(std::round(pt.y - box_h / 2.0)), box_w, box_h);
-		for (size_t i = 0; i < t_curr.data.size(); ++i) {
-			t_curr.data[i] = static_cast<float>(t_curr.data[i] * (1.0 - alpha) + cand.data[i] * alpha);
+		float fa = static_cast<float>(alpha);
+		int fx0 = static_cast<int>(std::round(pt.x - box_w / 2.0));
+		int fy0 = static_cast<int>(std::round(pt.y - box_h / 2.0));
+		ZeroMeanTemplate cand0;
+		cand0.ExtractFromGray(f_pyr.l0, fx0, fy0, box_w, box_h);
+		t_curr.l0.BlendEMA(cand0, fa);
+
+		if (t_curr.has_l1 && f_pyr.has_l1) {
+			ZeroMeanTemplate cand1;
+			cand1.ExtractFromGray(f_pyr.l1, fx0 / 2, fy0 / 2, t_curr.l1.w, t_curr.l1.h);
+			t_curr.l1.BlendEMA(cand1, fa);
 		}
-		float v_sum = 0.0f;
-		for (float v : t_curr.data) v_sum += v * v;
-		t_curr.norm = std::sqrt(std::max(1e-4f, v_sum));
+		if (t_curr.has_l2 && f_pyr.has_l2) {
+			ZeroMeanTemplate cand2;
+			cand2.ExtractFromGray(f_pyr.l2, fx0 / 4, fy0 / 4, t_curr.l2.w, t_curr.l2.h);
+			t_curr.l2.BlendEMA(cand2, fa);
+		}
 	}
 
 	return pt;
@@ -260,11 +536,12 @@ inline void SmoothTrajectory(std::map<int, TrackPoint>& traj, int window_size = 
 }
 
 // --------------------------------------------------------------------------
-// 4. 双向全范围追踪引擎 (Bidirectional Tracking Pipeline)
+// 4. 双向并行全范围追踪引擎 (Bidirectional Parallel Tracking Pipeline)
 // --------------------------------------------------------------------------
 
-inline MotionTrajectory TrackFullRange(
-	agi::Context* c,
+inline MotionTrajectory TrackFullRangeView(
+	MotionVideoView const& view_fwd,
+	MotionVideoView const& view_bwd,
 	int ref_frame,
 	int box_x0, int box_y0, int box_w, int box_h,
 	int start_frame, int end_frame,
@@ -273,13 +550,11 @@ inline MotionTrajectory TrackFullRange(
 	std::shared_ptr<std::atomic<bool>> cancel = nullptr)
 {
 	MotionTrajectory traj;
-	if (!c || !c->project) return traj;
-	auto provider = c->project->VideoProvider();
-	if (!provider || box_w < 8 || box_h < 8) return traj;
+	if (!view_fwd.get_frame || view_fwd.frame_count <= 0 || view_fwd.native_width <= 0 || view_fwd.native_height <= 0)
+		return traj;
+	if (box_w < 8 || box_h < 8) return traj;
 
-	int total_frames = provider->GetFrameCount();
-	if (total_frames <= 0) return traj;
-
+	int total_frames = view_fwd.frame_count;
 	ref_frame = std::clamp(ref_frame, 0, total_frames - 1);
 	start_frame = std::clamp(start_frame, 0, total_frames - 1);
 	end_frame = std::clamp(end_frame, 0, total_frames - 1);
@@ -288,14 +563,31 @@ inline MotionTrajectory TrackFullRange(
 	traj.ref_frame = ref_frame;
 	traj.box_w = box_w;
 	traj.box_h = box_h;
-	traj.video_width = provider->GetWidth();
-	traj.video_height = provider->GetHeight();
-	traj.fps = provider->GetFPS().FPS();
+	traj.video_width = view_fwd.native_width;
+	traj.video_height = view_fwd.native_height;
+	traj.fps = view_fwd.fps;
 
-	// 提取基准参考帧的初始目标模板
-	auto ref_f = provider->GetFrame(ref_frame, c->videoController->TimeAtFrame(ref_frame), true);
-	GrayPatch t_init;
-	t_init.Extract(*ref_f, box_x0, box_y0, box_w, box_h);
+	auto ref_f = view_fwd.get_frame(ref_frame);
+	if (!ref_f || ref_f->data.empty() || ref_f->width <= 0 || ref_f->height <= 0)
+		return traj;
+
+	double sx = static_cast<double>(ref_f->width) / view_fwd.native_width;
+	double sy = static_cast<double>(ref_f->height) / view_fwd.native_height;
+
+	int f_box_w = std::max(8, static_cast<int>(std::round(box_w * sx)));
+	int f_box_h = std::max(8, static_cast<int>(std::round(box_h * sy)));
+	int f_box_x0 = static_cast<int>(std::round(box_x0 * sx));
+	int f_box_y0 = static_cast<int>(std::round(box_y0 * sy));
+	int f_search_r = std::max(4, static_cast<int>(std::round(opt.search_radius * std::max(sx, sy))));
+
+	GrayImage ref_gray = BuildGrayImage(*ref_f);
+	bool need_l1 = (f_box_w >= 24 && f_box_h >= 12);
+	bool need_l2 = (need_l1 && (f_box_w / 2) >= 24 && (f_box_h / 2) >= 12);
+	GrayPyramid ref_pyr = BuildGrayPyramid(std::move(ref_gray), need_l1, need_l2);
+	TemplatePyramid t_init_pyr = BuildTemplatePyramid(ref_pyr, f_box_x0, f_box_y0, f_box_w, f_box_h);
+
+	double f_ref_cx = f_box_x0 + f_box_w / 2.0;
+	double f_ref_cy = f_box_y0 + f_box_h / 2.0;
 
 	TrackPoint ref_pt;
 	ref_pt.x = box_x0 + box_w / 2.0;
@@ -306,64 +598,150 @@ inline MotionTrajectory TrackFullRange(
 	traj.frames[ref_frame] = ref_pt;
 
 	int total_to_track = (end_frame - start_frame + 1);
-	int done_count = 1;
+	std::atomic<int> done_count{1};
+	std::mutex prog_mtx;
 
-	// 1. 向后追踪 (Forward: ref_frame + 1 -> end_frame)
-	if (ref_frame < end_frame) {
-		GrayPatch t_curr = t_init;
-		double cur_x = ref_pt.x;
-		double cur_y = ref_pt.y;
+	auto report_progress = [&](double nat_x, double nat_y) {
+		int cur = done_count.fetch_add(1) + 1;
+		if (on_progress) {
+			std::lock_guard<std::mutex> lk(prog_mtx);
+			on_progress(cur, total_to_track, nat_x, nat_y);
+		}
+	};
+
+	auto track_forward = [&](std::map<int, TrackPoint>& out_map) {
+		TemplatePyramid t_curr = t_init_pyr;
+		double cur_x = f_ref_cx;
+		double cur_y = f_ref_cy;
 		double vel_x = 0.0, vel_y = 0.0;
 
 		for (int f = ref_frame + 1; f <= end_frame; ++f) {
-			if (cancel && cancel->load()) return traj;
-
-			auto frame_data = provider->GetFrame(f, c->videoController->TimeAtFrame(f), true);
-			TrackPoint pt = MatchNextFrame(*frame_data, t_init, t_curr, box_w, box_h,
-			                               cur_x, cur_y, vel_x, vel_y,
-			                               opt.search_radius, opt.template_update_alpha);
+			if (cancel && cancel->load()) return;
+			auto frame_data = view_fwd.get_frame(f);
+			TrackPoint pt;
+			if (frame_data && !frame_data->data.empty()) {
+				GrayPyramid f_pyr = BuildGrayPyramid(BuildGrayImage(*frame_data), t_init_pyr.has_l1, t_init_pyr.has_l2);
+				pt = MatchNextFramePyramid(f_pyr, t_init_pyr, t_curr,
+					cur_x, cur_y, vel_x, vel_y, f_search_r, opt.template_update_alpha);
+			} else {
+				pt.x = cur_x;
+				pt.y = cur_y;
+				pt.score = 0.0;
+				pt.valid = false;
+			}
 			vel_x = 0.6 * vel_x + 0.4 * (pt.x - cur_x);
 			vel_y = 0.6 * vel_y + 0.4 * (pt.y - cur_y);
 			cur_x = pt.x;
 			cur_y = pt.y;
 
-			traj.frames[f] = pt;
-			done_count++;
-			if (on_progress) on_progress(done_count, total_to_track, cur_x, cur_y);
+			TrackPoint nat_pt = pt;
+			nat_pt.x /= sx;
+			nat_pt.y /= sy;
+			out_map[f] = nat_pt;
+			report_progress(nat_pt.x, nat_pt.y);
 		}
-	}
+	};
 
-	// 2. 向前追踪 (Backward: ref_frame - 1 -> start_frame)
-	if (ref_frame > start_frame) {
-		GrayPatch t_curr = t_init;
-		double cur_x = ref_pt.x;
-		double cur_y = ref_pt.y;
+	auto track_backward = [&](MotionVideoView const& bwd_view, std::map<int, TrackPoint>& out_map) {
+		TemplatePyramid t_curr = t_init_pyr;
+		double cur_x = f_ref_cx;
+		double cur_y = f_ref_cy;
 		double vel_x = 0.0, vel_y = 0.0;
 
-		for (int f = ref_frame - 1; f >= start_frame; --f) {
-			if (cancel && cancel->load()) return traj;
+		// 以 32 帧为块顺序正序预解码后再逆序追踪，避免 FFMS2 每帧后退反复寻址 GOP
+		constexpr int kBatchSize = 32;
+		for (int chunk_end = ref_frame - 1; chunk_end >= start_frame; ) {
+			if (cancel && cancel->load()) return;
+			int chunk_start = std::max(start_frame, chunk_end - kBatchSize + 1);
+			std::vector<GrayImage> batch;
+			batch.reserve(static_cast<size_t>(chunk_end - chunk_start + 1));
+			for (int f = chunk_start; f <= chunk_end; ++f) {
+				if (cancel && cancel->load()) return;
+				auto frame_data = bwd_view.get_frame(f);
+				batch.push_back(frame_data ? BuildGrayImage(*frame_data) : GrayImage{});
+			}
 
-			auto frame_data = provider->GetFrame(f, c->videoController->TimeAtFrame(f), true);
-			TrackPoint pt = MatchNextFrame(*frame_data, t_init, t_curr, box_w, box_h,
-			                               cur_x, cur_y, vel_x, vel_y,
-			                               opt.search_radius, opt.template_update_alpha);
-			vel_x = 0.6 * vel_x + 0.4 * (pt.x - cur_x);
-			vel_y = 0.6 * vel_y + 0.4 * (pt.y - cur_y);
-			cur_x = pt.x;
-			cur_y = pt.y;
+			for (int f = chunk_end; f >= chunk_start; --f) {
+				if (cancel && cancel->load()) return;
+				GrayImage& g = batch[static_cast<size_t>(f - chunk_start)];
+				TrackPoint pt;
+				if (!g.data.empty()) {
+					GrayPyramid f_pyr = BuildGrayPyramid(std::move(g), t_init_pyr.has_l1, t_init_pyr.has_l2);
+					pt = MatchNextFramePyramid(f_pyr, t_init_pyr, t_curr,
+						cur_x, cur_y, vel_x, vel_y, f_search_r, opt.template_update_alpha);
+				} else {
+					pt.x = cur_x;
+					pt.y = cur_y;
+					pt.score = 0.0;
+					pt.valid = false;
+				}
+				vel_x = 0.6 * vel_x + 0.4 * (pt.x - cur_x);
+				vel_y = 0.6 * vel_y + 0.4 * (pt.y - cur_y);
+				cur_x = pt.x;
+				cur_y = pt.y;
 
-			traj.frames[f] = pt;
-			done_count++;
-			if (on_progress) on_progress(done_count, total_to_track, cur_x, cur_y);
+				TrackPoint nat_pt = pt;
+				nat_pt.x /= sx;
+				nat_pt.y /= sy;
+				out_map[f] = nat_pt;
+				report_progress(nat_pt.x, nat_pt.y);
+			}
+			chunk_end = chunk_start - 1;
 		}
+	};
+
+	bool has_fwd = (ref_frame < end_frame);
+	bool has_bwd = (ref_frame > start_frame);
+	std::map<int, TrackPoint> fwd_map;
+	std::map<int, TrackPoint> bwd_map;
+
+	if (has_fwd && has_bwd && view_bwd.get_frame) {
+		std::thread bwd_thread([&]() {
+			track_backward(view_bwd, bwd_map);
+		});
+		track_forward(fwd_map);
+		if (bwd_thread.joinable()) bwd_thread.join();
+	} else {
+		if (has_fwd) track_forward(fwd_map);
+		if (has_bwd) track_backward(view_bwd.get_frame ? view_bwd : view_fwd, bwd_map);
 	}
 
-	// 3. 执行轨迹平滑滤波
+	if (cancel && cancel->load()) return traj;
+
+	traj.frames.insert(fwd_map.begin(), fwd_map.end());
+	traj.frames.insert(bwd_map.begin(), bwd_map.end());
+
 	if (opt.smooth_window >= 3) {
 		SmoothTrajectory(traj.frames, opt.smooth_window);
 	}
 
 	return traj;
+}
+
+inline MotionTrajectory TrackFullRange(
+	agi::Context* c,
+	int ref_frame,
+	int box_x0, int box_y0, int box_w, int box_h,
+	int start_frame, int end_frame,
+	const TrackingOptions& opt,
+	std::function<void(int cur_frame, int total, double x, double y)> on_progress = nullptr,
+	std::shared_ptr<std::atomic<bool>> cancel = nullptr)
+{
+	if (!c || !c->project) return {};
+	auto provider = c->project->VideoProvider();
+	if (!provider) return {};
+
+	agi::vfr::Framerate tc = c->project->Timecodes();
+	MotionVideoView view_fwd;
+	view_fwd.frame_count = provider->GetFrameCount();
+	view_fwd.native_width = provider->GetWidth();
+	view_fwd.native_height = provider->GetHeight();
+	view_fwd.fps = provider->GetFPS().FPS();
+	view_fwd.get_frame = [provider, tc](int f) {
+		return provider->GetFrame(f, tc.TimeAtFrame(f), true);
+	};
+	return TrackFullRangeView(view_fwd, MotionVideoView{}, ref_frame, box_x0, box_y0, box_w, box_h,
+		start_frame, end_frame, opt, std::move(on_progress), std::move(cancel));
 }
 
 // --------------------------------------------------------------------------
@@ -414,7 +792,8 @@ inline int ApplyTrajectoryToLine(
 	agi::Context* c,
 	AssDialogue* target_line,
 	const MotionTrajectory& traj,
-	const TrackingOptions& opt)
+	const TrackingOptions& opt,
+	bool preserve_user_focus = false)
 {
 	if (!c || !c->ass || !target_line || traj.frames.empty()) return 0;
 	auto vctrl = c->videoController.get();
@@ -560,21 +939,40 @@ inline int ApplyTrajectoryToLine(
 		}
 	}
 
-	if (!opt.backup_original) {
+	if (!opt.backup_original && it != c->ass->Events.end()) {
 		c->ass->Events.erase(it);
 		delete target_line;
 	}
 
-	c->ass->Commit("运动追踪生成逐帧相对位移字幕", AssFile::COMMIT_DIAG_ADDREM | AssFile::COMMIT_DIAG_TIME | AssFile::COMMIT_DIAG_TEXT);
+	c->ass->Commit(to_wx("运动追踪生成逐帧相对位移字幕"), AssFile::COMMIT_DIAG_ADDREM | AssFile::COMMIT_DIAG_TIME | AssFile::COMMIT_DIAG_TEXT);
 
-	if (leader_line) {
-		c->selectionController->SetActiveLine(leader_line);
-		c->selectionController->SetSelectedSet({leader_line});
-	} else {
-		c->selectionController->SetActiveLine(new_lines.front());
-		c->selectionController->SetSelectedSet({new_lines.front()});
+	if (!preserve_user_focus) {
+		if (leader_line) {
+			c->selectionController->SetActiveLine(leader_line);
+			c->selectionController->SetSelectedSet({leader_line});
+		} else {
+			c->selectionController->SetActiveLine(new_lines.front());
+			c->selectionController->SetSelectedSet({new_lines.front()});
+		}
 	}
 	return static_cast<int>(new_lines.size());
+}
+
+inline std::pair<std::mutex, MotionTrajectory>& LastTrajectoryStore() {
+	static std::pair<std::mutex, MotionTrajectory> store;
+	return store;
+}
+
+inline void SetLastTrajectory(MotionTrajectory const& traj) {
+	auto& s = LastTrajectoryStore();
+	std::lock_guard<std::mutex> lk(s.first);
+	s.second = traj;
+}
+
+inline MotionTrajectory GetLastTrajectory() {
+	auto& s = LastTrajectoryStore();
+	std::lock_guard<std::mutex> lk(s.first);
+	return s.second;
 }
 
 // --------------------------------------------------------------------------

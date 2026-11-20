@@ -7,14 +7,17 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "background_task_manager.h"
 #include "compat.h"
 #include "frame_main.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/video_provider.h"
 #include "motion_tracker.h"
 #include "project.h"
 #include "selection_controller.h"
 #include "video_controller.h"
 #include "video_display.h"
+#include "video_provider_manager.h"
 #include "visual_tool_cross.h"
 #include "visual_tool_motion_track.h"
 #include "format.h"
@@ -22,8 +25,11 @@
 #include <libaegisub/format.h>
 
 #include <atomic>
+#include <chrono>
 #include <memory>
+#include <mutex>
 #include <thread>
+#include <wx/app.h>
 #include <wx/button.h>
 #include <wx/checkbox.h>
 #include <wx/clipbrd.h>
@@ -257,7 +263,7 @@ public:
 		progress_gauge_ = new wxGauge(this, wxID_ANY, 100);
 		main_sizer->Add(progress_gauge_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-		status_lbl_ = new wxStaticText(this, wxID_ANY, to_wx("就绪。请确认花字选框无误后点击下方【开始追踪并应用】。"));
+		status_lbl_ = new wxStaticText(this, wxID_ANY, to_wx("就绪。点击开始后将在底部状态栏后台追踪，期间可继续编辑其他字幕。"));
 		status_lbl_->SetForegroundColour(wxColour(100, 100, 100));
 		main_sizer->Add(status_lbl_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
@@ -338,12 +344,16 @@ public:
 
 	void OnTrackAndApply(wxCommandEvent&) {
 		if (running_) return;
-		if (!c_ || !c_->project->VideoProvider()) {
+		if (!c_ || !c_->project || !c_->project->VideoProvider()) {
 			wxMessageBox(to_wx("请先打开视频文件。"), to_wx("提示"), wxOK | wxICON_WARNING, this);
 			return;
 		}
 		if (!target_line_) {
 			wxMessageBox(to_wx("请先在字幕表格中选择要追踪的字幕行。"), to_wx("提示"), wxOK | wxICON_WARNING, this);
+			return;
+		}
+		if (c_->bgTasks && c_->bgTasks->IsLineLocked(target_line_)) {
+			wxMessageBox(to_wx("当前字幕行正在后台处理中，请先选择其他字幕行或等待完成。"), to_wx("提示"), wxOK | wxICON_WARNING, this);
 			return;
 		}
 
@@ -369,91 +379,153 @@ public:
 		opt.fold_in_grid = chk_fold_in_grid_->GetValue();
 		opt.backup_original = chk_backup_->GetValue();
 
-		running_ = true;
-		cancel_->store(false);
-		btn_track_and_apply_->Disable();
-		btn_copy_mocha_->Disable();
-		btn_cancel_->Enable();
-		btn_close_->Disable();
-		progress_gauge_->SetValue(0);
-		status_lbl_->SetLabel(to_wx("正在执行多尺度光流/NCC目标追踪..."));
+		auto fallback_provider = c_->project->VideoProvider();
+		int frame_count = fallback_provider->GetFrameCount();
+		int native_w = fallback_provider->GetWidth();
+		int native_h = fallback_provider->GetHeight();
+		if (frame_count <= 0 || native_w <= 0 || native_h <= 0) return;
 
-		if (worker_thread_.joinable()) worker_thread_.join();
+		double fps = fallback_provider->GetFPS().FPS();
+		agi::fs::path video_path = c_->project->VideoName();
+		agi::ycbcr::Header colormatrix = c_->ass->GetYCbCrMatrix();
+		WorkerVideoOptions worker_opts = SnapshotWorkerVideoOptions(video_path);
+		agi::vfr::Framerate timecodes = c_->project->Timecodes();
 
-		auto alive = alive_;
-		auto cancel = cancel_;
+		int lo_f = std::clamp(std::min(start_frame, end_frame), 0, frame_count - 1);
+		int hi_f = std::clamp(std::max(start_frame, end_frame), 0, frame_count - 1);
+		int total_steps = std::max(1, hi_f - lo_f + 1);
+		int target_line_id = target_line_->Id;
 
-		worker_thread_ = std::thread([this, alive, cancel, ref_frame, box_x, box_y, box_w, box_h, start_frame, end_frame, opt]() {
-			auto on_prog = [this, alive](int cur, int total, double cur_x, double cur_y) {
-				wxTheApp->CallAfter([this, alive, cur, total, cur_x, cur_y]() {
+		auto handle = c_->bgTasks->BeginTask(to_wx("运动追踪"), to_wx("追踪中"), {target_line_id}, total_steps);
+		uint64_t task_id = handle.id;
+		auto cancel = handle.cancel;
+		auto alive = handle.alive;
+		agi::Context *ctx = c_;
+
+		std::thread coord([ctx, task_id, cancel, alive, target_line_id, ref_frame, box_x, box_y, box_w, box_h, start_frame, end_frame, opt,
+			frame_count, native_w, native_h, fps, video_path, colormatrix, worker_opts, timecodes, fallback_provider, lo_f, hi_f]() {
+			std::unique_ptr<VideoProvider> wp_fwd;
+			std::unique_ptr<VideoProvider> wp_bwd;
+			if (!video_path.empty() && !cancel->load()) {
+				wp_fwd = CreateFFmpegSourceWorkerProvider(video_path, colormatrix, worker_opts);
+				if (wp_fwd && ref_frame > lo_f && ref_frame < hi_f && !cancel->load()) {
+					wp_bwd = CreateFFmpegSourceWorkerProvider(video_path, colormatrix, worker_opts);
+				}
+			}
+
+			MotionTrack::MotionVideoView view_fwd;
+			view_fwd.frame_count = frame_count;
+			view_fwd.native_width = native_w;
+			view_fwd.native_height = native_h;
+			view_fwd.fps = fps;
+
+			MotionTrack::MotionVideoView view_bwd;
+			if (wp_fwd) {
+				VideoProvider* fwd_ptr = wp_fwd.get();
+				view_fwd.get_frame = [fwd_ptr](int f) {
+					auto frame = std::make_shared<VideoFrame>();
+					fwd_ptr->GetFrame(f, *frame);
+					return std::shared_ptr<const VideoFrame>(std::move(frame));
+				};
+				if (wp_bwd) {
+					VideoProvider* bwd_ptr = wp_bwd.get();
+					view_bwd = view_fwd;
+					view_bwd.get_frame = [bwd_ptr](int f) {
+						auto frame = std::make_shared<VideoFrame>();
+						bwd_ptr->GetFrame(f, *frame);
+						return std::shared_ptr<const VideoFrame>(std::move(frame));
+					};
+				}
+			} else {
+				view_fwd.get_frame = [fallback_provider, timecodes](int f) {
+					return fallback_provider->GetFrame(f, timecodes.TimeAtFrame(f), true);
+				};
+			}
+
+			std::mutex prog_mtx;
+			auto last_report = std::chrono::steady_clock::now() - std::chrono::milliseconds(100);
+			auto on_prog = [ctx, alive, task_id, &prog_mtx, &last_report](int cur, int total, double /*cur_x*/, double /*cur_y*/) {
+				auto now = std::chrono::steady_clock::now();
+				{
+					std::lock_guard<std::mutex> lk(prog_mtx);
+					if (cur < total && std::chrono::duration_cast<std::chrono::milliseconds>(now - last_report).count() < 80)
+						return;
+					last_report = now;
+				}
+				if (!alive->load()) return;
+				wxTheApp->CallAfter([ctx, alive, task_id, cur, total]() {
 					if (!alive->load()) return;
-					if (total > 0 && progress_gauge_) {
-						progress_gauge_->SetValue(std::clamp(static_cast<int>(cur * 100 / total), 0, 100));
-					}
-					if (status_lbl_) {
-						status_lbl_->SetLabel(fmt_wx("正在追踪第 %d/%d 帧 (坐标: X=%.1f, Y=%.1f)...", cur, total, cur_x, cur_y));
+					if (ctx && ctx->bgTasks) {
+						ctx->bgTasks->UpdateProgress(task_id, cur, total, fmt_wx("运动追踪 %d/%d 帧", cur, total));
 					}
 				});
 			};
 
-			MotionTrack::MotionTrajectory traj = MotionTrack::TrackFullRange(
-				c_, ref_frame, box_x, box_y, box_w, box_h, start_frame, end_frame, opt, on_prog, cancel);
+			MotionTrack::MotionTrajectory traj = MotionTrack::TrackFullRangeView(
+				view_fwd, view_bwd, ref_frame, box_x, box_y, box_w, box_h, start_frame, end_frame, opt, on_prog, cancel);
 
-			wxTheApp->CallAfter([this, alive, traj, opt]() {
+			wp_bwd.reset();
+			wp_fwd.reset();
+
+			wxTheApp->CallAfter([ctx, alive, cancel, task_id, target_line_id, traj, opt]() {
 				if (!alive->load()) return;
-				running_ = false;
-				btn_track_and_apply_->Enable();
-				btn_copy_mocha_->Enable();
-				btn_cancel_->Disable();
-				btn_close_->Enable();
+				bool was_cancelled = cancel->load();
+				if (ctx && ctx->bgTasks)
+					ctx->bgTasks->FinishTask(task_id);
 
-				if (cancel_->load()) {
-					status_lbl_->SetLabel(to_wx("已取消追踪"));
+				if (was_cancelled) {
+					if (ctx && ctx->frame)
+						ctx->frame->StatusTimeout(to_wx("运动追踪已停止"), 4000);
+					return;
+				}
+
+				AssDialogue* live_line = (ctx && ctx->bgTasks) ? ctx->bgTasks->FindLineById(target_line_id) : nullptr;
+				if (!live_line) {
+					if (ctx && ctx->frame)
+						ctx->frame->StatusTimeout(to_wx("运动追踪完成，但原字幕行已被删除"), 5000);
 					return;
 				}
 
 				if (traj.frames.empty()) {
-					status_lbl_->SetLabel(to_wx("追踪失败：未获取到有效图像"));
+					if (ctx && ctx->frame)
+						ctx->frame->StatusTimeout(to_wx("运动追踪失败：未获取到有效画面"), 5000);
 					return;
 				}
 
-				last_trajectory_ = traj;
-				progress_gauge_->SetValue(100);
-
-				// 将追踪生成的相对位移写入 ASS 字幕行
-				int count = MotionTrack::ApplyTrajectoryToLine(c_, target_line_, traj, opt);
-				status_lbl_->SetLabel(fmt_wx("追踪成功！已生成 %d 帧相对运动字幕。", count));
-
-				wxMessageBox(fmt_wx("运动追踪完成！\n已成功生成 %d 行逐帧相对位移字幕。\n\n如需调整，可随时按 Ctrl+Z 一键撤销还原。", count),
-					to_wx("追踪成功"), wxOK | wxICON_INFORMATION, this);
-
-				// 更新字幕视图并定位到首帧
-				if (c_->videoController) {
-					c_->videoController->JumpToFrame(traj.ref_frame);
+				MotionTrack::SetLastTrajectory(traj);
+				int count = MotionTrack::ApplyTrajectoryToLine(ctx, live_line, traj, opt, true);
+				if (ctx && ctx->frame) {
+					ctx->frame->StatusTimeout(fmt_wx("运动追踪完成：已生成 %d 段相对运动字幕（Ctrl+Z 可撤销）", count), 6000);
 				}
 			});
 		});
+
+		c_->bgTasks->AttachCoordinator(task_id, std::move(coord));
+		EndModal(wxID_OK);
 	}
 
 	void OnCopyMochaData(wxCommandEvent&) {
-		if (last_trajectory_.frames.empty()) {
+		MotionTrack::MotionTrajectory traj = MotionTrack::GetLastTrajectory();
+		if (traj.frames.empty())
+			traj = last_trajectory_;
+		if (traj.frames.empty()) {
 			// 若尚未追踪过，先跑一次
 			wxMessageBox(to_wx("请先点击【一键追踪并应用到字幕】生成追踪轨迹数据。"), to_wx("提示"), wxOK | wxICON_INFORMATION, this);
 			return;
 		}
 
 		std::string mocha_data = MotionTrack::BuildMochaClipboardData(
-			last_trajectory_,
+			traj,
 			ref_frame_ctrl_->GetValue(),
-			last_trajectory_.video_width,
-			last_trajectory_.video_height,
-			last_trajectory_.fps);
+			traj.video_width,
+			traj.video_height,
+			traj.fps);
 
 		if (wxTheClipboard->Open()) {
 			wxTheClipboard->SetData(new wxTextDataObject(to_wx(mocha_data)));
 			wxTheClipboard->Close();
 			wxMessageBox(fmt_wx("已成功将 %d 帧的 Mocha 关键帧数据（Adobe After Effects 6.0 Keyframe Data）复制到剪贴板！\n\n可直接粘贴至 Aegisub-Motion 或外部软件。",
-				static_cast<int>(last_trajectory_.frames.size())),
+				static_cast<int>(traj.frames.size())),
 				to_wx("复制成功"), wxOK | wxICON_INFORMATION, this);
 		}
 	}

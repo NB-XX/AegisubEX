@@ -23,6 +23,7 @@ class AudioBox;
 class AudioController;
 class AssDialogue;
 class AudioKaraoke;
+class BackgroundTaskManager;
 class DialogManager;
 class FrameMain;
 class Project;
@@ -66,6 +67,7 @@ struct Context {
 	AudioKaraoke *karaoke = nullptr;
 	BaseGrid *subsGrid = nullptr;
 	std::unique_ptr<DialogManager> dialog;
+	std::unique_ptr<BackgroundTaskManager> bgTasks;
 	FrameMain *frame = nullptr;
 	VideoDisplay *videoDisplay = nullptr;
 	AIResultPanel *aiPanel = nullptr;

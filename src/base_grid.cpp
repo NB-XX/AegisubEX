@@ -45,6 +45,7 @@
 #include "subs_controller.h"
 #include "video_controller.h"
 #include "ai_assistant.h"
+#include "background_task_manager.h"
 
 #include <libaegisub/util.h>
 
@@ -114,6 +115,7 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 
 		context->selectionController->AddActiveLineListener(&BaseGrid::OnActiveLineChanged, this),
 		context->selectionController->AddSelectionListener([&]{ Refresh(false); }),
+		context->bgTasks->AddLockStateListener([&]{ Refresh(false); }),
 		context->videoController->AddReviewModeListener(&BaseGrid::OnReviewModeChanged, this),
 
 		OPT_SUB("Subtitle/Grid/Font Face", &BaseGrid::UpdateStyle, this),
@@ -403,6 +405,9 @@ void BaseGrid::MakeRowVisible(int row) {
 }
 
 void BaseGrid::SelectRow(int row, bool addToSelected, bool select) {
+	AssDialogue *dlg = GetDialogue(row);
+	if (dlg && context && context->bgTasks && context->bgTasks->IsLineLocked(dlg))
+		return;
 	if (row < 0 || (size_t)row >= index_line_map.size()) return;
 
 	AssDialogue *line = index_line_map[row];
@@ -606,12 +611,21 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 		dc.SetBrush(color);
 
 		// Draw row background color
-		if (color != row_colors.Default) {
+		bool is_locked = (context && context->bgTasks && context->bgTasks->IsLineLocked(curDiag));
+		if (is_locked) {
+			dc.SetPen(*wxTRANSPARENT_PEN);
+			dc.SetBrush(wxBrush(wxColour(225, 229, 236)));
+			dc.DrawRectangle(grid_x, (i + 1) * lineHeight + 1, w, lineHeight);
+			dc.SetBrush(wxBrush(wxColour(65, 130, 210)));
+			dc.DrawRectangle(0, (i + 1) * lineHeight + 1, FromDIP(4), lineHeight);
+		} else if (color != row_colors.Default) {
 			dc.SetPen(*wxTRANSPARENT_PEN);
 			dc.DrawRectangle(grid_x, (i + 1) * lineHeight + 1, w, lineHeight);
 		}
 
-		if (active_line != curDiag && curDiag->CollidesWith(active_line))
+		if (is_locked)
+			dc.SetTextForeground(wxColour(115, 125, 140));
+		else if (active_line != curDiag && curDiag->CollidesWith(active_line))
 			dc.SetTextForeground(text_collision);
 		else if (inSel)
 			dc.SetTextForeground(text_selection);
@@ -627,6 +641,21 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 			if (paint_columns[j])
 				columns[j]->Paint(dc, x, y, curDiag, context);
 			x += columns[j]->Width();
+		}
+		if (is_locked) {
+			wxString tag = context->bgTasks->GetLockTag(curDiag);
+			if (tag.IsEmpty()) tag = to_wx("锁定");
+			wxString badge = "[" + tag + "]";
+			wxSize ext = dc.GetTextExtent(badge);
+			int bw = ext.GetWidth() + FromDIP(10);
+			int bh = std::max(12, lineHeight - FromDIP(4));
+			int bx = std::max(grid_x + 2, w - bw - FromDIP(6));
+			int by = y + (lineHeight - bh) / 2 + 1;
+			dc.SetPen(*wxTRANSPARENT_PEN);
+			dc.SetBrush(wxBrush(wxColour(55, 118, 200)));
+			dc.DrawRoundedRectangle(bx, by, bw, bh, FromDIP(3));
+			dc.SetTextForeground(*wxWHITE);
+			dc.DrawText(badge, bx + FromDIP(5), by + (bh - ext.GetHeight()) / 2);
 		}
 		if (review_mode && playback_row == i + yPos) {
 			dc.SetBrush(*wxTRANSPARENT_BRUSH);
@@ -707,6 +736,17 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 	if (holding && !click)
 		row = mid(0, row, GetRows()-1);
 	AssDialogue *dlg = GetDialogue(row);
+	if (dlg && context && context->bgTasks && context->bgTasks->IsLineLocked(dlg)) {
+		if (holding && !event.LeftIsDown()) {
+			holding = false;
+			ReleaseMouse();
+			return;
+		}
+		if (event.GetWheelRotation() == 0 &&
+			(click || dclick || event.RightDown() || event.MiddleDown() || holding)) {
+			return;
+		}
+	}
 	if (!dlg) row = 0;
 
 	bool is_motion_group = (dlg && dlg->Effect.get().rfind("motion-group:", 0) == 0);
@@ -866,6 +906,12 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 void BaseGrid::OnContextMenu(wxContextMenuEvent &evt) {
 	wxPoint pos = evt.GetPosition();
 	if (pos == wxDefaultPosition || ScreenToClient(pos).y > lineHeight) {
+		if (pos != wxDefaultPosition && context && context->bgTasks) {
+			int row = ScreenToClient(pos).y / lineHeight + yPos - 1;
+			AssDialogue *dlg = GetDialogue(row);
+			if (dlg && context->bgTasks->IsLineLocked(dlg))
+				return;
+		}
 		if (!context_menu) context_menu = menu::GetMenu("grid_context", (wxID_HIGHEST + 1) + 8000, context);
 		menu::OpenPopupMenu(context_menu.get(), this);
 	}
@@ -1020,6 +1066,23 @@ void BaseGrid::OnKeyDown(wxKeyEvent &event) {
 	int current_grid_row = active_line ? GetRowFromDialogue(active_line) : 0;
 	if (current_grid_row < 0) current_grid_row = 0;
 	int next = mid(0, current_grid_row + dir * step, GetRows() - 1);
+	if (context && context->bgTasks && dir != 0) {
+		while (next >= 0 && next < GetRows() && context->bgTasks->IsLineLocked(GetDialogue(next))) {
+			int stepped = next + dir;
+			if (stepped < 0 || stepped >= GetRows()) break;
+			next = stepped;
+		}
+		if (context->bgTasks->IsLineLocked(GetDialogue(next))) {
+			int rev = current_grid_row + dir * step;
+			while (rev >= 0 && rev < GetRows() && context->bgTasks->IsLineLocked(GetDialogue(rev))) {
+				rev -= dir;
+			}
+			if (rev >= 0 && rev < GetRows() && !context->bgTasks->IsLineLocked(GetDialogue(rev)))
+				next = rev;
+			else
+				return;
+		}
+	}
 	context->selectionController->SetActiveLine(GetDialogue(next));
 
 	// Move selection
@@ -1043,8 +1106,11 @@ void BaseGrid::OnKeyDown(wxKeyEvent &event) {
 
 		// Select range
 		Selection newsel;
-		for (int i = begin; i <= end; i++)
-			newsel.insert(GetDialogue(i));
+		for (int i = begin; i <= end; i++) {
+			AssDialogue *d = GetDialogue(i);
+			if (d && (!context || !context->bgTasks || !context->bgTasks->IsLineLocked(d)))
+				newsel.insert(d);
+		}
 
 		context->selectionController->SetSelectedSet(std::move(newsel));
 

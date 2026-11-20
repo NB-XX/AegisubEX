@@ -32,9 +32,11 @@
 /// @ingroup video_input ffms
 ///
 
+#include "video_provider_manager.h"
+#include "include/aegisub/video_provider.h"
+
 #ifdef WITH_FFMS2
 #include "ffmpegsource_common.h"
-#include "include/aegisub/video_provider.h"
 
 #include "options.h"
 #include "utils.h"
@@ -42,8 +44,10 @@
 
 #include <libaegisub/fs.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <string_view>
 
 using agi::ycbcr_matrix;
@@ -51,6 +55,113 @@ using agi::ycbcr_range;
 namespace ycbcr = agi::ycbcr;
 
 namespace {
+std::mutex s_ffms_lifecycle_mutex;
+
+void ApplyVideoOutputFormat(FFMS_VideoSource *video_source, int width, int height, bool smooth_preview, int &out_width, int &out_height, FFMS_ErrorInfo &err_info) {
+	if (!video_source) return;
+
+	if (smooth_preview && height > 720) {
+		out_height = 720;
+		out_width = (static_cast<int64_t>(width) * 720 / height + 1) & ~1;
+	} else {
+		out_width = width;
+		out_height = height;
+	}
+
+	const int TargetFormat[] = { FFMS_GetPixFmt("bgra"), -1 };
+	int resizer = smooth_preview ? FFMS_RESIZER_FAST_BILINEAR : FFMS_RESIZER_BICUBIC;
+	if (FFMS_SetOutputFormatV2(video_source, TargetFormat, out_width, out_height, resizer, &err_info)) {
+		out_width = width;
+		out_height = height;
+		FFMS_SetOutputFormatV2(video_source, TargetFormat, width, height, FFMS_RESIZER_BICUBIC, &err_info);
+	}
+}
+
+void ApplyFlipAndRotation(const FFMS_Frame *frame, const FFMS_VideoProperties *video_info, int cur_w, int cur_h, VideoFrame &out) {
+	out.data.assign(frame->Data[0], frame->Data[0] + frame->Linesize[0] * cur_h);
+	out.flipped = false;
+	out.width = cur_w;
+	out.height = cur_h;
+	out.pitch = frame->Linesize[0];
+
+	// Handle flip
+	if (video_info->Flip > 0)
+		for (int x = 0; x < cur_h; ++x)
+			for (int y = 0; y < cur_w / 2; ++y)
+				for (int ch = 0; ch < 4; ++ch)
+					std::swap(out.data[frame->Linesize[0] * x + 4 * y + ch], out.data[frame->Linesize[0] * x + 4 * (cur_w - 1 - y) + ch]);
+
+	else if (video_info->Flip < 0)
+		for (int x = 0; x < cur_h / 2; ++x)
+			for (int y = 0; y < cur_w; ++y)
+				for (int ch = 0; ch < 4; ++ch)
+					std::swap(out.data[frame->Linesize[0] * x + 4 * y + ch], out.data[frame->Linesize[0] * (cur_h - 1 - x) + 4 * y + ch]);
+
+	// Handle rotation
+	if (video_info->Rotation % 360 == 180 || video_info->Rotation % 360 == -180) {
+		std::vector<unsigned char> data(std::move(out.data));
+		out.data.resize(cur_w * cur_h * 4);
+		for (int x = 0; x < cur_h; ++x)
+			for (int y = 0; y < cur_w; ++y)
+				for (int ch = 0; ch < 4; ++ch)
+					out.data[4 * (cur_w * x + y) + ch] = data[frame->Linesize[0] * (cur_h - 1 - x) + 4 * (cur_w - 1 - y) + ch];
+		out.pitch = 4 * cur_w;
+	}
+	else if (video_info->Rotation % 180 == 90 || video_info->Rotation % 360 == -270) {
+		std::vector<unsigned char> data(std::move(out.data));
+		out.data.resize(cur_w * cur_h * 4);
+		for (int x = 0; x < cur_w; ++x)
+			for (int y = 0; y < cur_h; ++y)
+				for (int ch = 0; ch < 4; ++ch)
+					out.data[4 * (cur_h * x + y) + ch] = data[frame->Linesize[0] * y + 4 * (cur_w - 1 - x) + ch];
+		out.width = cur_h;
+		out.height = cur_w;
+		out.pitch = 4 * cur_h;
+	}
+	else if (video_info->Rotation % 180 == 270 || video_info->Rotation % 360 == -90) {
+		std::vector<unsigned char> data(std::move(out.data));
+		out.data.resize(cur_w * cur_h * 4);
+		for (int x = 0; x < cur_w; ++x)
+			for (int y = 0; y < cur_h; ++y)
+				for (int ch = 0; ch < 4; ++ch)
+					out.data[4 * (cur_h * x + y) + ch] = data[frame->Linesize[0] * (cur_h - 1 - y) + 4 * x + ch];
+		out.width = cur_h;
+		out.height = cur_w;
+		out.pitch = 4 * cur_h;
+	}
+}
+
+void PopulateTimecodesAndKeyFrames(FFMS_VideoSource *video_source, const FFMS_VideoProperties *video_info, std::vector<int> &keyframes_list, agi::vfr::Framerate &timecodes) {
+	FFMS_Track *FrameData = FFMS_GetTrackFromVideo(video_source);
+	if (FrameData == nullptr)
+		throw VideoOpenError("failed to get frame data");
+	const FFMS_TrackTimeBase *TimeBase = FFMS_GetTimeBase(FrameData);
+	if (TimeBase == nullptr)
+		throw VideoOpenError("failed to get track time base");
+
+	std::vector<int> TimecodesVector;
+	for (int CurFrameNum = 0; CurFrameNum < video_info->NumFrames; CurFrameNum++) {
+		const FFMS_FrameInfo *CurFrameData = FFMS_GetFrameInfo(FrameData, CurFrameNum);
+		if (!CurFrameData)
+			throw VideoOpenError("Couldn't get info about frame " + std::to_string(CurFrameNum));
+
+		if (CurFrameData->KeyFrame)
+			keyframes_list.push_back(CurFrameNum);
+
+		// FFMS2 timestamps are rational wall-clock milliseconds. Round to the
+		// nearest millisecond instead of truncating: at 60 fps this avoids
+		// biasing every frame boundary early by up to 1 ms.
+		const long double timestamp = static_cast<long double>(CurFrameData->PTS) * TimeBase->Num / TimeBase->Den;
+		if (timestamp < std::numeric_limits<int>::min() || timestamp > std::numeric_limits<int>::max())
+			throw VideoOpenError("Video timestamp is outside the supported range");
+		int Timestamp = static_cast<int>(std::llround(timestamp));
+		TimecodesVector.push_back(Timestamp);
+	}
+	if (TimecodesVector.size() < 2)
+		timecodes = 25.0;
+	else
+		timecodes = agi::vfr::Framerate(TimecodesVector);
+}
 bool IsHDRFrame(const FFMS_Frame *frame) {
 	switch (frame->TransferCharateristics) {
 		case 16:	// SMPTE ST 2084 (PQ)
@@ -264,58 +375,11 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, ycbcr::
 
 	ApplyOutputFormat();
 
-	// get frame info data
-	FFMS_Track *FrameData = FFMS_GetTrackFromVideo(VideoSource);
-	if (FrameData == nullptr)
-		throw VideoOpenError("failed to get frame data");
-	const FFMS_TrackTimeBase *TimeBase = FFMS_GetTimeBase(FrameData);
-	if (TimeBase == nullptr)
-		throw VideoOpenError("failed to get track time base");
-
-	// build list of keyframes and timecodes
-	std::vector<int> TimecodesVector;
-	for (int CurFrameNum = 0; CurFrameNum < VideoInfo->NumFrames; CurFrameNum++) {
-		const FFMS_FrameInfo *CurFrameData = FFMS_GetFrameInfo(FrameData, CurFrameNum);
-		if (!CurFrameData)
-			throw VideoOpenError("Couldn't get info about frame " + std::to_string(CurFrameNum));
-
-		// keyframe?
-		if (CurFrameData->KeyFrame)
-			KeyFramesList.push_back(CurFrameNum);
-
-		// FFMS2 timestamps are rational wall-clock milliseconds. Round to the
-		// nearest millisecond instead of truncating: at 60 fps this avoids
-		// biasing every frame boundary early by up to 1 ms.
-		const long double timestamp = static_cast<long double>(CurFrameData->PTS) * TimeBase->Num / TimeBase->Den;
-		if (timestamp < std::numeric_limits<int>::min() || timestamp > std::numeric_limits<int>::max())
-			throw VideoOpenError("Video timestamp is outside the supported range");
-		int Timestamp = static_cast<int>(std::llround(timestamp));
-		TimecodesVector.push_back(Timestamp);
-	}
-	if (TimecodesVector.size() < 2)
-		Timecodes = 25.0;
-	else
-		Timecodes = agi::vfr::Framerate(TimecodesVector);
+	PopulateTimecodesAndKeyFrames(VideoSource, VideoInfo, KeyFramesList, Timecodes);
 }
 
 void FFmpegSourceVideoProvider::ApplyOutputFormat() {
-	if (!VideoSource) return;
-
-	if (smooth_preview && Height > 720) {
-		OutputHeight = 720;
-		OutputWidth = (static_cast<int64_t>(Width) * 720 / Height + 1) & ~1;
-	} else {
-		OutputWidth = Width;
-		OutputHeight = Height;
-	}
-
-	const int TargetFormat[] = { FFMS_GetPixFmt("bgra"), -1 };
-	int resizer = smooth_preview ? FFMS_RESIZER_FAST_BILINEAR : FFMS_RESIZER_BICUBIC;
-	if (FFMS_SetOutputFormatV2(VideoSource, TargetFormat, OutputWidth, OutputHeight, resizer, &ErrInfo)) {
-		OutputWidth = Width;
-		OutputHeight = Height;
-		FFMS_SetOutputFormatV2(VideoSource, TargetFormat, Width, Height, FFMS_RESIZER_BICUBIC, &ErrInfo);
-	}
+	ApplyVideoOutputFormat(VideoSource, Width, Height, smooth_preview, OutputWidth, OutputHeight, ErrInfo);
 }
 
 void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
@@ -323,67 +387,182 @@ void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
 
 	auto frame = FFMS_GetFrame(VideoSource, n, &ErrInfo);
 	if (!frame)
-		throw VideoDecodeError(std::string("Failed to retrieve frame: ") +  ErrInfo.Buffer);
+		throw VideoDecodeError(std::string("Failed to retrieve frame: ") + ErrInfo.Buffer);
 
 	int cur_w = OutputWidth > 0 ? OutputWidth : Width;
 	int cur_h = OutputHeight > 0 ? OutputHeight : Height;
-
-	out.data.assign(frame->Data[0], frame->Data[0] + frame->Linesize[0] * cur_h);
-	out.flipped = false;
-	out.width = cur_w;
-	out.height = cur_h;
-	out.pitch = frame->Linesize[0];
-
-	// Handle flip
-	if (VideoInfo->Flip > 0)
-		for (int x = 0; x < cur_h; ++x)
-			for (int y = 0; y < cur_w / 2; ++y)
-				for (int ch = 0; ch < 4; ++ch)
-					std::swap(out.data[frame->Linesize[0] * x + 4 * y + ch], out.data[frame->Linesize[0] * x + 4 * (cur_w - 1 - y) + ch]);
-
-	else if (VideoInfo->Flip < 0)
-		for (int x = 0; x < cur_h / 2; ++x)
-			for (int y = 0; y < cur_w; ++y)
-				for (int ch = 0; ch < 4; ++ch)
-					std::swap(out.data[frame->Linesize[0] * x + 4 * y + ch], out.data[frame->Linesize[0] * (cur_h - 1 - x) + 4 * y + ch]);
-
-	// Handle rotation
-	if (VideoInfo->Rotation % 360 == 180 || VideoInfo->Rotation % 360 == -180) {
-		std::vector<unsigned char> data(std::move(out.data));
-		out.data.resize(cur_w * cur_h * 4);
-		for (int x = 0; x < cur_h; ++x)
-			for (int y = 0; y < cur_w; ++y)
-				for (int ch = 0; ch < 4; ++ch)
-					out.data[4 * (cur_w * x + y) + ch] = data[frame->Linesize[0] * (cur_h - 1 - x) + 4 * (cur_w - 1 - y) + ch];
-		out.pitch = 4 * cur_w;
-	}
-	else if (VideoInfo->Rotation % 180 == 90 || VideoInfo->Rotation % 360 == -270) {
-		std::vector<unsigned char> data(std::move(out.data));
-		out.data.resize(cur_w * cur_h * 4);
-		for (int x = 0; x < cur_w; ++x)
-			for (int y = 0; y < cur_h; ++y)
-				for (int ch = 0; ch < 4; ++ch)
-					out.data[4 * (cur_h * x + y) + ch] = data[frame->Linesize[0] * y + 4 * (cur_w - 1 - x) + ch];
-		out.width = cur_h;
-		out.height = cur_w;
-		out.pitch = 4 * cur_h;
-	}
-	else if (VideoInfo->Rotation % 180 == 270 || VideoInfo->Rotation % 360 == -90) {
-		std::vector<unsigned char> data(std::move(out.data));
-		out.data.resize(cur_w * cur_h * 4);
-		for (int x = 0; x < cur_w; ++x)
-			for (int y = 0; y < cur_h; ++y)
-				for (int ch = 0; ch < 4; ++ch)
-					out.data[4 * (cur_h * x + y) + ch] = data[frame->Linesize[0] * (cur_h - 1 - y) + 4 * x + ch];
-		out.width = cur_h;
-		out.height = cur_w;
-		out.pitch = 4 * cur_h;
-	}
+	ApplyFlipAndRotation(frame, VideoInfo, cur_w, cur_h, out);
 }
+
+class FFmpegSourceWorkerProvider final : public VideoProvider {
+	agi::scoped_holder<FFMS_VideoSource*, void (FFMS_CC*)(FFMS_VideoSource*)> VideoSource;
+	const FFMS_VideoProperties *VideoInfo = nullptr;
+
+	int Width = -1;
+	int Height = -1;
+	ycbcr::header_colorspace VideoColorSpace = ycbcr::header_colorspace::unspecified();
+	double DAR = 1.0;
+	std::vector<int> KeyFramesList;
+	agi::vfr::Framerate Timecodes;
+	ycbcr::header_colorspace ColorSpace;
+	bool HDR = false;
+
+	char FFMSErrMsg[1024] = {};
+	FFMS_ErrorInfo ErrInfo{};
+	bool has_audio = false;
+
+	int OutputWidth = 0;
+	int OutputHeight = 0;
+	bool smooth_preview = false;
+
+	void ApplyColorSpaceLocked(ycbcr::Header matrix) {
+		auto [CM, CR] = VideoColorSpace;
+		matrix.override_colorspace(CM, CR, Width, Height);
+
+		if (FFMS_SetInputFormatV(VideoSource, static_cast<int>(CM), static_cast<int>(CR), FFMS_GetPixFmt(""), &ErrInfo))
+			throw VideoOpenError(std::string("Failed to set input format: ") + ErrInfo.Buffer);
+
+		ColorSpace = {CM, CR};
+	}
+
+	void ApplyOutputFormatLocked() {
+		ApplyVideoOutputFormat(VideoSource, Width, Height, smooth_preview, OutputWidth, OutputHeight, ErrInfo);
+	}
+
+public:
+	FFmpegSourceWorkerProvider(agi::fs::path const& filename, ycbcr::Header colormatrix, WorkerVideoOptions const& opts)
+	: VideoSource(nullptr, FFMS_DestroyVideoSource)
+	{
+		ErrInfo.Buffer = FFMSErrMsg;
+		ErrInfo.BufferSize = sizeof(FFMSErrMsg);
+		ErrInfo.ErrorType = FFMS_ERROR_SUCCESS;
+		ErrInfo.SubType = FFMS_ERROR_SUCCESS;
+
+		std::lock_guard<std::mutex> lock(s_ffms_lifecycle_mutex);
+		FFMS_Init(0, 0);
+
+		agi::scoped_holder<FFMS_Index*, void (FFMS_CC*)(FFMS_Index*)>
+			Index(FFMS_ReadIndex(opts.ffms_cache_file.string().c_str(), &ErrInfo), FFMS_DestroyIndex);
+		if (!Index || FFMS_IndexBelongsToFile(Index, filename.string().c_str(), &ErrInfo))
+			throw VideoOpenError("Worker index missing or stale");
+
+		int TrackNumber = FFMS_GetFirstIndexedTrackOfType(Index, FFMS_TYPE_VIDEO, &ErrInfo);
+		if (TrackNumber < 0)
+			throw VideoNotSupported(std::string("Couldn't find any video tracks: ") + ErrInfo.Buffer);
+
+		has_audio = FFMS_GetFirstTrackOfType(Index, FFMS_TYPE_AUDIO, nullptr) != -1;
+
+		int Threads = opts.ffms_threads > 0 ? std::min(opts.ffms_threads, 2) : 2;
+		int SeekMode = opts.ffms_unsafe_seeking ? FFMS_SEEK_UNSAFE : FFMS_SEEK_NORMAL;
+
+		VideoSource = FFMS_CreateVideoSource(filename.string().c_str(), TrackNumber, Index, Threads, SeekMode, &ErrInfo);
+		if (!VideoSource)
+			throw VideoOpenError(std::string("Failed to open worker video track: ") + ErrInfo.Buffer);
+
+		VideoInfo = FFMS_GetVideoProperties(VideoSource);
+		const FFMS_Frame *TempFrame = FFMS_GetFrame(VideoSource, 0, &ErrInfo);
+		if (!TempFrame)
+			throw VideoOpenError(std::string("Failed to decode first frame: ") + ErrInfo.Buffer);
+
+		Width = TempFrame->EncodedWidth;
+		Height = TempFrame->EncodedHeight;
+		OutputWidth = Width;
+		OutputHeight = Height;
+		if (VideoInfo->SARDen > 0 && VideoInfo->SARNum > 0)
+			DAR = double(Width) * VideoInfo->SARNum / ((double)Height * VideoInfo->SARDen);
+		else
+			DAR = double(Width) / Height;
+
+		VideoColorSpace = {static_cast<ycbcr_matrix>(TempFrame->ColorSpace), static_cast<ycbcr_range>(TempFrame->ColorRange)};
+		HDR = IsHDRFrame(TempFrame);
+
+		ApplyColorSpaceLocked(colormatrix);
+		ApplyOutputFormatLocked();
+		PopulateTimecodesAndKeyFrames(VideoSource, VideoInfo, KeyFramesList, Timecodes);
+	}
+
+	~FFmpegSourceWorkerProvider() override {
+		std::lock_guard<std::mutex> lock(s_ffms_lifecycle_mutex);
+		VideoSource = nullptr;
+	}
+
+	void SetSmoothPreview(bool enabled) override {
+		std::lock_guard<std::mutex> lock(s_ffms_lifecycle_mutex);
+		if (smooth_preview == enabled) return;
+		smooth_preview = enabled;
+		ApplyOutputFormatLocked();
+	}
+	bool IsSmoothPreview() const override { return smooth_preview; }
+
+	void GetFrame(int n, VideoFrame &out) override {
+		n = mid(0, n, GetFrameCount() - 1);
+		auto frame = FFMS_GetFrame(VideoSource, n, &ErrInfo);
+		if (!frame)
+			throw VideoDecodeError(std::string("Failed to retrieve frame: ") + ErrInfo.Buffer);
+
+		int cur_w = OutputWidth > 0 ? OutputWidth : Width;
+		int cur_h = OutputHeight > 0 ? OutputHeight : Height;
+		ApplyFlipAndRotation(frame, VideoInfo, cur_w, cur_h, out);
+	}
+
+	void SetColorSpace(ycbcr::Header matrix) override {
+		std::lock_guard<std::mutex> lock(s_ffms_lifecycle_mutex);
+		ApplyColorSpaceLocked(matrix);
+	}
+
+	int GetFrameCount() const override             { return VideoInfo->NumFrames; }
+	int GetWidth() const override  { return (VideoInfo->Rotation % 180 == 90 || VideoInfo->Rotation % 180 == -90) ? Height : Width; }
+	int GetHeight() const override { return (VideoInfo->Rotation % 180 == 90 || VideoInfo->Rotation % 180 == -90) ? Width : Height; }
+	double GetDAR() const override { return (VideoInfo->Rotation % 180 == 90 || VideoInfo->Rotation % 180 == -90) ? 1 / DAR : DAR; }
+
+	agi::vfr::Framerate GetFPS() const override                 { return Timecodes; }
+	ycbcr::header_colorspace GetColorSpace() const override     { return ColorSpace; }
+	ycbcr::header_colorspace GetRealColorSpace() const override { return VideoColorSpace; }
+	bool IsHDRorWCG() const override                            { return HDR; }
+	std::vector<int> GetKeyFrames() const override              { return KeyFramesList; }
+	std::string GetDecoderName() const override                 { return "FFmpegSourceWorker"; }
+	bool WantsCaching() const override                          { return false; }
+	bool HasAudio() const override                              { return has_audio; }
+};
+}
+
+WorkerVideoOptions SnapshotWorkerVideoOptions(agi::fs::path const& video_file) {
+	WorkerVideoOptions opts;
+	opts.ffms_threads = OPT_GET("Provider/Video/FFmpegSource/Decoding Threads")->GetInt();
+	opts.ffms_unsafe_seeking = OPT_GET("Provider/Video/FFmpegSource/Unsafe Seeking")->GetBool();
+	if (!video_file.empty() && agi::fs::FileExists(video_file)) {
+		std::lock_guard<std::mutex> lock(s_ffms_lifecycle_mutex);
+		FFmpegSourceProvider helper(nullptr);
+		opts.ffms_cache_file = helper.GetCacheFilename(video_file);
+	}
+	return opts;
+}
+
+std::unique_ptr<VideoProvider> CreateFFmpegSourceWorkerProvider(agi::fs::path const& video_file, agi::ycbcr::Header colormatrix, WorkerVideoOptions const& opts) {
+	if (video_file.empty() || opts.ffms_cache_file.empty())
+		return nullptr;
+	if (!agi::fs::FileExists(video_file) || !agi::fs::FileExists(opts.ffms_cache_file))
+		return nullptr;
+	try {
+		return std::make_unique<FFmpegSourceWorkerProvider>(video_file, colormatrix, opts);
+	}
+	catch (...) {
+		return nullptr;
+	}
 }
 
 std::unique_ptr<VideoProvider> CreateFFmpegSourceVideoProvider(agi::fs::path const& path, ycbcr::Header colormatrix, agi::BackgroundRunner *br) {
 	return std::make_unique<FFmpegSourceVideoProvider>(path, colormatrix, br);
+}
+
+#else
+
+WorkerVideoOptions SnapshotWorkerVideoOptions(agi::fs::path const&) {
+	return {};
+}
+
+std::unique_ptr<VideoProvider> CreateFFmpegSourceWorkerProvider(agi::fs::path const&, agi::ycbcr::Header, WorkerVideoOptions const&) {
+	return nullptr;
 }
 
 #endif /* WITH_FFMS2 */

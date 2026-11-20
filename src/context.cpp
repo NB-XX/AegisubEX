@@ -19,6 +19,7 @@
 #include "ass_file.h"
 #include "audio_controller.h"
 #include "auto4_base.h"
+#include "background_task_manager.h"
 #include "dialog_manager.h"
 #include "initial_line_state.h"
 #include "options.h"
@@ -45,6 +46,7 @@ Context::Context()
 , search(std::make_unique<SearchReplaceEngine>(this))
 , path(std::make_unique<Path>(*config::path))
 , dialog(std::make_unique<DialogManager>())
+, bgTasks(std::make_unique<BackgroundTaskManager>(this))
 {
 	subsController->SetSelectionController(selectionController.get());
 }
