@@ -88,11 +88,7 @@
         { "recent" : "Video" },
         { "command" : "video/open/dummy" },
         { "command" : "video/details" },
-        { "command" : "video/tool/frame_match_current", "text" : "单键快速对帧\tCtrl+Alt+D" },
-        { "command" : "video/tool/frame_match_batch", "text" : "批量视觉对帧" },
-        { "command" : "video/frame_match_settings", "text" : "视觉对帧设置..." },
-        { "command" : "video/motion_track", "text" : "运动追踪与相对位移..." },
-        { "command" : "video/shuffler", "text" : "按字幕切分/合并视频..." },
+        { "command" : "video/frame_match_settings", "text" : "对帧设置..." },
         {},
         { "command" : "timecode/open" },
         { "command" : "timecode/save" },
@@ -135,10 +131,7 @@
         { "command" : "audio/view/spectrum" },
         { "command" : "audio/view/waveform" },
         { "command" : "audio/open/blank" },
-        { "command" : "audio/open/noise" },
-        {},
-        { "command" : "ai/vad_diarize" },
-        { "command" : "ai/audio_translate" }
+        { "command" : "audio/open/noise" }
     ],
     "main/view" : [
         { "command" : "app/language" },

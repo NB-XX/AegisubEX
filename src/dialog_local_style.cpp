@@ -510,7 +510,7 @@ void ApplyLocalStyleTags(agi::Context *c, int sel_start, int sel_end, const std:
 }
 
 DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_start, int sel_end)
-: wxDialog(parent, -1, to_wx("局部样式变更"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+: wxDialog(parent, -1, to_wx("选中样式设置"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 , context(c)
 , sel_start(sel_start)
 , sel_end(sel_end)
@@ -542,31 +542,31 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 	main_sizer->Add(text_box, wxSizerFlags().Expand().Border(wxALL, 6));
 
 	// 2. Color adjustments
-	auto color_box = new wxStaticBoxSizer(wxVERTICAL, this, to_wx("颜色调节"));
+	auto color_box = new wxStaticBoxSizer(wxVERTICAL, this, to_wx("颜色"));
 	auto color_grid = new wxFlexGridSizer(2, 4, 6, 12);
 
-	chk_c1 = new wxCheckBox(this, -1, to_wx("主体颜色 (\\c)"));
+	chk_c1 = new wxCheckBox(this, -1, to_wx("主体颜色"));
 	btn_c1 = new ColourButton(this, FromDIP(wxSize(38, 20)), false, sel_state.c1);
 	auto c1_sizer = new wxBoxSizer(wxHORIZONTAL);
 	c1_sizer->Add(chk_c1, wxSizerFlags().Center().Border(wxRIGHT, 5));
 	c1_sizer->Add(btn_c1, wxSizerFlags().Center());
 	color_grid->Add(c1_sizer, wxSizerFlags().CenterVertical());
 
-	chk_c3 = new wxCheckBox(this, -1, to_wx("边框颜色 (\\3c)"));
+	chk_c3 = new wxCheckBox(this, -1, to_wx("边框颜色"));
 	btn_c3 = new ColourButton(this, FromDIP(wxSize(38, 20)), false, sel_state.c3);
 	auto c3_sizer = new wxBoxSizer(wxHORIZONTAL);
 	c3_sizer->Add(chk_c3, wxSizerFlags().Center().Border(wxRIGHT, 5));
 	c3_sizer->Add(btn_c3, wxSizerFlags().Center());
 	color_grid->Add(c3_sizer, wxSizerFlags().CenterVertical());
 
-	chk_c4 = new wxCheckBox(this, -1, to_wx("阴影颜色 (\\4c)"));
+	chk_c4 = new wxCheckBox(this, -1, to_wx("阴影颜色"));
 	btn_c4 = new ColourButton(this, FromDIP(wxSize(38, 20)), false, sel_state.c4);
 	auto c4_sizer = new wxBoxSizer(wxHORIZONTAL);
 	c4_sizer->Add(chk_c4, wxSizerFlags().Center().Border(wxRIGHT, 5));
 	c4_sizer->Add(btn_c4, wxSizerFlags().Center());
 	color_grid->Add(c4_sizer, wxSizerFlags().CenterVertical());
 
-	chk_c2 = new wxCheckBox(this, -1, to_wx("次要颜色 (\\2c)"));
+	chk_c2 = new wxCheckBox(this, -1, to_wx("次要颜色"));
 	btn_c2 = new ColourButton(this, FromDIP(wxSize(38, 20)), false, sel_state.c2);
 	auto c2_sizer = new wxBoxSizer(wxHORIZONTAL);
 	c2_sizer->Add(chk_c2, wxSizerFlags().Center().Border(wxRIGHT, 5));
@@ -577,10 +577,10 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 	main_sizer->Add(color_box, wxSizerFlags().Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 6));
 
 	// 3. Font and Size
-	auto font_box = new wxStaticBoxSizer(wxVERTICAL, this, to_wx("字体与字号"));
+	auto font_box = new wxStaticBoxSizer(wxVERTICAL, this, to_wx("字体"));
 	auto font_row = new wxBoxSizer(wxHORIZONTAL);
 
-	chk_fn = new wxCheckBox(this, -1, to_wx("字体 (\\fn):"));
+	chk_fn = new wxCheckBox(this, -1, to_wx("字体:"));
 	wxArrayString font_list = wxFontEnumerator::GetFacenames();
 	font_list.Sort();
 	cmb_fn = new wxComboBox(this, -1, to_wx(sel_state.fn), wxDefaultPosition, wxDefaultSize, font_list, wxCB_DROPDOWN);
@@ -589,7 +589,7 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 	font_row->Add(chk_fn, wxSizerFlags().Center().Border(wxRIGHT, 5));
 	font_row->Add(cmb_fn, wxSizerFlags(1).Center().Border(wxRIGHT, 15));
 
-	chk_fs = new wxCheckBox(this, -1, to_wx("字号 (\\fs):"));
+	chk_fs = new wxCheckBox(this, -1, to_wx("字号:"));
 	spn_fs = new wxSpinCtrl(this, -1, std::to_string(sel_state.fs), wxDefaultPosition, FromDIP(wxSize(75, -1)), wxSP_ARROW_KEYS, 1, 1000, sel_state.fs);
 	spn_fs->Enable(false);
 
@@ -600,14 +600,14 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 	main_sizer->Add(font_box, wxSizerFlags().Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 6));
 
 	// 4. Style attributes (Bold, Italic, Underline, Strikeout)
-	auto style_box = new wxStaticBoxSizer(wxVERTICAL, this, to_wx("样式效果"));
+	auto style_box = new wxStaticBoxSizer(wxVERTICAL, this, to_wx("效果"));
 	auto style_grid = new wxFlexGridSizer(2, 4, 6, 12);
 
 	wxArrayString bool_choices;
-	bool_choices.Add(to_wx("开启 (1)"));
-	bool_choices.Add(to_wx("关闭 (0)"));
+	bool_choices.Add(to_wx("开启"));
+	bool_choices.Add(to_wx("关闭"));
 
-	chk_b = new wxCheckBox(this, -1, to_wx("粗体 (\\b):"));
+	chk_b = new wxCheckBox(this, -1, to_wx("粗体:"));
 	cho_b = new wxChoice(this, -1, wxDefaultPosition, wxDefaultSize, bool_choices);
 	cho_b->SetSelection(sel_state.b == 0 ? 0 : 1);
 	cho_b->Enable(false);
@@ -616,7 +616,7 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 	b_sizer->Add(cho_b, wxSizerFlags().Center());
 	style_grid->Add(b_sizer, wxSizerFlags().CenterVertical());
 
-	chk_i = new wxCheckBox(this, -1, to_wx("斜体 (\\i):"));
+	chk_i = new wxCheckBox(this, -1, to_wx("斜体:"));
 	cho_i = new wxChoice(this, -1, wxDefaultPosition, wxDefaultSize, bool_choices);
 	cho_i->SetSelection(sel_state.i == 0 ? 0 : 1);
 	cho_i->Enable(false);
@@ -625,7 +625,7 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 	i_sizer->Add(cho_i, wxSizerFlags().Center());
 	style_grid->Add(i_sizer, wxSizerFlags().CenterVertical());
 
-	chk_u = new wxCheckBox(this, -1, to_wx("下划线 (\\u):"));
+	chk_u = new wxCheckBox(this, -1, to_wx("下划线:"));
 	cho_u = new wxChoice(this, -1, wxDefaultPosition, wxDefaultSize, bool_choices);
 	cho_u->SetSelection(sel_state.u == 0 ? 0 : 1);
 	cho_u->Enable(false);
@@ -634,7 +634,7 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 	u_sizer->Add(cho_u, wxSizerFlags().Center());
 	style_grid->Add(u_sizer, wxSizerFlags().CenterVertical());
 
-	chk_s = new wxCheckBox(this, -1, to_wx("删除线 (\\s):"));
+	chk_s = new wxCheckBox(this, -1, to_wx("删除线:"));
 	cho_s = new wxChoice(this, -1, wxDefaultPosition, wxDefaultSize, bool_choices);
 	cho_s->SetSelection(sel_state.s == 0 ? 0 : 1);
 	cho_s->Enable(false);
@@ -700,110 +700,141 @@ DialogLocalStyle::DialogLocalStyle(wxWindow *parent, agi::Context *c, int sel_st
 
 DialogLocalStyle::~DialogLocalStyle() = default;
 
-std::string DialogLocalStyle::GetOpeningTag() const {
+std::string BuildOpeningTagFromState(const LocalStyleState &s) {
 	std::string tags;
-
-	if (chk_c1 && chk_c1->IsChecked() && btn_c1) {
-		tags += "\\c" + btn_c1->GetColor().GetAssOverrideFormatted();
-	}
-	if (chk_c2 && chk_c2->IsChecked() && btn_c2) {
-		tags += "\\2c" + btn_c2->GetColor().GetAssOverrideFormatted();
-	}
-	if (chk_c3 && chk_c3->IsChecked() && btn_c3) {
-		tags += "\\3c" + btn_c3->GetColor().GetAssOverrideFormatted();
-	}
-	if (chk_c4 && chk_c4->IsChecked() && btn_c4) {
-		tags += "\\4c" + btn_c4->GetColor().GetAssOverrideFormatted();
-	}
-	if (chk_fn && chk_fn->IsChecked() && cmb_fn) {
-		tags += "\\fn" + from_wx(cmb_fn->GetValue());
-	}
-	if (chk_fs && chk_fs->IsChecked() && spn_fs) {
-		tags += "\\fs" + std::to_string(spn_fs->GetValue());
-	}
-	if (chk_b && chk_b->IsChecked() && cho_b) {
-		tags += "\\b" + std::to_string(cho_b->GetSelection() == 0 ? 1 : 0);
-	}
-	if (chk_i && chk_i->IsChecked() && cho_i) {
-		tags += "\\i" + std::to_string(cho_i->GetSelection() == 0 ? 1 : 0);
-	}
-	if (chk_u && chk_u->IsChecked() && cho_u) {
-		tags += "\\u" + std::to_string(cho_u->GetSelection() == 0 ? 1 : 0);
-	}
-	if (chk_s && chk_s->IsChecked() && cho_s) {
-		tags += "\\s" + std::to_string(cho_s->GetSelection() == 0 ? 1 : 0);
-	}
-
+	if (s.has_c1) tags += "\\c" + s.c1.GetAssOverrideFormatted();
+	if (s.has_c2) tags += "\\2c" + s.c2.GetAssOverrideFormatted();
+	if (s.has_c3) tags += "\\3c" + s.c3.GetAssOverrideFormatted();
+	if (s.has_c4) tags += "\\4c" + s.c4.GetAssOverrideFormatted();
+	if (s.has_fn) tags += "\\fn" + s.fn;
+	if (s.has_fs) tags += "\\fs" + std::to_string(s.fs);
+	if (s.has_b)  tags += "\\b" + std::to_string(s.b ? 1 : 0);
+	if (s.has_i)  tags += "\\i" + std::to_string(s.i ? 1 : 0);
+	if (s.has_u)  tags += "\\u" + std::to_string(s.u ? 1 : 0);
+	if (s.has_s)  tags += "\\s" + std::to_string(s.s ? 1 : 0);
 	if (tags.empty()) return "";
 	return "{" + tags + "}";
 }
 
-std::string DialogLocalStyle::GetClosingTag() const {
+std::string BuildClosingTagFromState(const LocalStyleState &s, const LocalStyleState &pre_state) {
 	std::string tags;
-
-	if (chk_s && chk_s->IsChecked()) {
-		if (pre_state.has_s)
-			tags += "\\s" + std::to_string(pre_state.s);
-		else
-			tags += "\\s";
-	}
-	if (chk_u && chk_u->IsChecked()) {
-		if (pre_state.has_u)
-			tags += "\\u" + std::to_string(pre_state.u);
-		else
-			tags += "\\u";
-	}
-	if (chk_i && chk_i->IsChecked()) {
-		if (pre_state.has_i)
-			tags += "\\i" + std::to_string(pre_state.i);
-		else
-			tags += "\\i";
-	}
-	if (chk_b && chk_b->IsChecked()) {
-		if (pre_state.has_b)
-			tags += "\\b" + std::to_string(pre_state.b);
-		else
-			tags += "\\b";
-	}
-	if (chk_fs && chk_fs->IsChecked()) {
-		if (pre_state.has_fs)
-			tags += "\\fs" + std::to_string(pre_state.fs);
-		else
-			tags += "\\fs";
-	}
-	if (chk_fn && chk_fn->IsChecked()) {
-		if (pre_state.has_fn)
-			tags += "\\fn" + pre_state.fn;
-		else
-			tags += "\\fn";
-	}
-	if (chk_c4 && chk_c4->IsChecked()) {
-		if (pre_state.has_c4)
-			tags += "\\4c" + pre_state.c4.GetAssOverrideFormatted();
-		else
-			tags += "\\4c";
-	}
-	if (chk_c3 && chk_c3->IsChecked()) {
-		if (pre_state.has_c3)
-			tags += "\\3c" + pre_state.c3.GetAssOverrideFormatted();
-		else
-			tags += "\\3c";
-	}
-	if (chk_c2 && chk_c2->IsChecked()) {
-		if (pre_state.has_c2)
-			tags += "\\2c" + pre_state.c2.GetAssOverrideFormatted();
-		else
-			tags += "\\2c";
-	}
-	if (chk_c1 && chk_c1->IsChecked()) {
-		if (pre_state.has_c1)
-			tags += "\\c" + pre_state.c1.GetAssOverrideFormatted();
-		else
-			tags += "\\c";
-	}
-
+	if (s.has_s)  tags += pre_state.has_s  ? ("\\s"  + std::to_string(pre_state.s)) : "\\s";
+	if (s.has_u)  tags += pre_state.has_u  ? ("\\u"  + std::to_string(pre_state.u)) : "\\u";
+	if (s.has_i)  tags += pre_state.has_i  ? ("\\i"  + std::to_string(pre_state.i)) : "\\i";
+	if (s.has_b)  tags += pre_state.has_b  ? ("\\b"  + std::to_string(pre_state.b)) : "\\b";
+	if (s.has_fs) tags += pre_state.has_fs ? ("\\fs" + std::to_string(pre_state.fs)) : "\\fs";
+	if (s.has_fn) tags += pre_state.has_fn ? ("\\fn" + pre_state.fn) : "\\fn";
+	if (s.has_c4) tags += pre_state.has_c4 ? ("\\4c" + pre_state.c4.GetAssOverrideFormatted()) : "\\4c";
+	if (s.has_c3) tags += pre_state.has_c3 ? ("\\3c" + pre_state.c3.GetAssOverrideFormatted()) : "\\3c";
+	if (s.has_c2) tags += pre_state.has_c2 ? ("\\2c" + pre_state.c2.GetAssOverrideFormatted()) : "\\2c";
+	if (s.has_c1) tags += pre_state.has_c1 ? ("\\c"  + pre_state.c1.GetAssOverrideFormatted()) : "\\c";
 	if (tags.empty()) return "";
 	return "{" + tags + "}";
+}
+
+std::string FormatLocalStylePresetLabel(const LocalStyleState &s) {
+	std::vector<std::string> parts;
+	if (s.has_c1) parts.push_back("主色(" + s.c1.GetHexFormatted() + ")");
+	if (s.has_c3) parts.push_back("边框色(" + s.c3.GetHexFormatted() + ")");
+	if (s.has_c4) parts.push_back("阴影色(" + s.c4.GetHexFormatted() + ")");
+	if (s.has_c2) parts.push_back("次色(" + s.c2.GetHexFormatted() + ")");
+	if (s.has_fn) parts.push_back("字体(" + s.fn + ")");
+	if (s.has_fs) parts.push_back("字号(" + std::to_string(s.fs) + ")");
+	if (s.has_b)  parts.push_back(s.b ? "粗体" : "去粗体");
+	if (s.has_i)  parts.push_back(s.i ? "斜体" : "去斜体");
+	if (s.has_u)  parts.push_back(s.u ? "下划线" : "去下划线");
+	if (s.has_s)  parts.push_back(s.s ? "删除线" : "去删除线");
+
+	std::string res;
+	for (size_t idx = 0; idx < parts.size(); ++idx) {
+		if (idx > 0) res += "·";
+		res += parts[idx];
+	}
+	return res;
+}
+
+namespace {
+std::vector<LocalStylePreset>& LocalStyleHistoryStore() {
+	static std::vector<LocalStylePreset> history;
+	return history;
+}
+}
+
+const std::vector<LocalStylePreset>& GetLocalStyleHistory() {
+	return LocalStyleHistoryStore();
+}
+
+void RecordLocalStyleHistory(const LocalStyleState &s) {
+	std::string opening = BuildOpeningTagFromState(s);
+	if (opening.empty()) return;
+
+	auto &history = LocalStyleHistoryStore();
+	history.erase(std::remove_if(history.begin(), history.end(), [&](const LocalStylePreset &p) {
+		return p.opening_tag == opening;
+	}), history.end());
+
+	history.insert(history.begin(), LocalStylePreset{s, FormatLocalStylePresetLabel(s), std::move(opening)});
+	if (history.size() > 5) {
+		history.resize(5);
+	}
+}
+
+void ApplyLocalStylePreset(agi::Context *c, int sel_start, int sel_end, const LocalStylePreset &preset) {
+	if (!c || !c->selectionController) return;
+	AssDialogue *active_line = c->selectionController->GetActiveLine();
+	if (!active_line) return;
+	if (sel_start > sel_end) std::swap(sel_start, sel_end);
+	if (sel_start >= sel_end) return;
+
+	std::string full_text = active_line->Text.get();
+	TryExpandAdjacentStyleOverrides(full_text, sel_start, sel_end);
+
+	const AssStyle *style = nullptr;
+	LocalStyleState pre_state = AnalyzeLocalStylePreState(c, sel_start, style);
+	std::string opening = BuildOpeningTagFromState(preset.state);
+	if (opening.empty()) return;
+	std::string closing = BuildClosingTagFromState(preset.state, pre_state);
+
+	ApplyLocalStyleTags(c, sel_start, sel_end, opening, closing);
+	RecordLocalStyleHistory(preset.state);
+}
+
+static LocalStyleState ExtractDialogState(
+	wxCheckBox *chk_c1, ColourButton *btn_c1,
+	wxCheckBox *chk_c2, ColourButton *btn_c2,
+	wxCheckBox *chk_c3, ColourButton *btn_c3,
+	wxCheckBox *chk_c4, ColourButton *btn_c4,
+	wxCheckBox *chk_fn, wxComboBox *cmb_fn,
+	wxCheckBox *chk_fs, wxSpinCtrl *spn_fs,
+	wxCheckBox *chk_b, wxChoice *cho_b,
+	wxCheckBox *chk_i, wxChoice *cho_i,
+	wxCheckBox *chk_u, wxChoice *cho_u,
+	wxCheckBox *chk_s, wxChoice *cho_s)
+{
+	LocalStyleState s;
+	if (chk_c1 && chk_c1->IsChecked() && btn_c1) { s.has_c1 = true; s.c1 = btn_c1->GetColor(); }
+	if (chk_c2 && chk_c2->IsChecked() && btn_c2) { s.has_c2 = true; s.c2 = btn_c2->GetColor(); }
+	if (chk_c3 && chk_c3->IsChecked() && btn_c3) { s.has_c3 = true; s.c3 = btn_c3->GetColor(); }
+	if (chk_c4 && chk_c4->IsChecked() && btn_c4) { s.has_c4 = true; s.c4 = btn_c4->GetColor(); }
+	if (chk_fn && chk_fn->IsChecked() && cmb_fn) { s.has_fn = true; s.fn = from_wx(cmb_fn->GetValue()); }
+	if (chk_fs && chk_fs->IsChecked() && spn_fs) { s.has_fs = true; s.fs = spn_fs->GetValue(); }
+	if (chk_b  && chk_b->IsChecked()  && cho_b)  { s.has_b  = true; s.b  = (cho_b->GetSelection() == 0 ? 1 : 0); }
+	if (chk_i  && chk_i->IsChecked()  && cho_i)  { s.has_i  = true; s.i  = (cho_i->GetSelection() == 0 ? 1 : 0); }
+	if (chk_u  && chk_u->IsChecked()  && cho_u)  { s.has_u  = true; s.u  = (cho_u->GetSelection() == 0 ? 1 : 0); }
+	if (chk_s  && chk_s->IsChecked()  && cho_s)  { s.has_s  = true; s.s  = (cho_s->GetSelection() == 0 ? 1 : 0); }
+	return s;
+}
+
+std::string DialogLocalStyle::GetOpeningTag() const {
+	return BuildOpeningTagFromState(ExtractDialogState(
+		chk_c1, btn_c1, chk_c2, btn_c2, chk_c3, btn_c3, chk_c4, btn_c4,
+		chk_fn, cmb_fn, chk_fs, spn_fs, chk_b, cho_b, chk_i, cho_i, chk_u, cho_u, chk_s, cho_s));
+}
+
+std::string DialogLocalStyle::GetClosingTag() const {
+	return BuildClosingTagFromState(ExtractDialogState(
+		chk_c1, btn_c1, chk_c2, btn_c2, chk_c3, btn_c3, chk_c4, btn_c4,
+		chk_fn, cmb_fn, chk_fs, spn_fs, chk_b, cho_b, chk_i, cho_i, chk_u, cho_u, chk_s, cho_s), pre_state);
 }
 
 void DialogLocalStyle::UpdatePreview() {
@@ -815,7 +846,11 @@ void DialogLocalStyle::UpdatePreview() {
 }
 
 void DialogLocalStyle::Apply() {
-	std::string opening = GetOpeningTag();
-	std::string closing = GetClosingTag();
+	LocalStyleState s = ExtractDialogState(
+		chk_c1, btn_c1, chk_c2, btn_c2, chk_c3, btn_c3, chk_c4, btn_c4,
+		chk_fn, cmb_fn, chk_fs, spn_fs, chk_b, cho_b, chk_i, cho_i, chk_u, cho_u, chk_s, cho_s);
+	std::string opening = BuildOpeningTagFromState(s);
+	std::string closing = BuildClosingTagFromState(s, pre_state);
 	ApplyLocalStyleTags(context, sel_start, sel_end, opening, closing);
+	RecordLocalStyleHistory(s);
 }

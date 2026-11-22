@@ -93,7 +93,6 @@ class AIResultPanel final : public wxPanel {
 	wxButton* audio_apply_sel_ = nullptr;
 	wxButton* audio_apply_all_ = nullptr;
 	wxButton* audio_copy_btn_ = nullptr;
-	wxButton* audio_vad_btn_ = nullptr;
 	wxButton* audio_retry_ = nullptr;
 	wxButton* audio_clear_ = nullptr;
 
@@ -197,7 +196,7 @@ void RunAIFrameTranslate(agi::Context* c, int x0 = -1, int y0 = -1, int x1 = -1,
 /// 执行音频选中行识别与翻译
 void RunAIAudioTranslate(agi::Context* c);
 
-/// 智能人声切分与说话人识别对话框
+/// VAD自动分轴对话框
 void ShowVADDiarizeDialog(agi::Context* c);
 
 /// 兼容接口：根据模式打开面板并执行对应翻译

@@ -20,7 +20,7 @@ namespace {
 		CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 		wxString StrMenu(const agi::Context *) const override { return to_wx("视频截图翻译"); }
 		wxString StrDisplay(const agi::Context *) const override { return to_wx("截图翻译"); }
-		wxString StrHelp() const override { return to_wx("视频截图翻译：在视频画面上框选字幕区域，直接截图并调用 AI 大模型识别与翻译"); }
+		wxString StrHelp() const override { return to_wx("截图翻译"); }
 
 		wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
 			static const char svg[] =
@@ -52,7 +52,7 @@ namespace {
 					c->aiPanel->Show(true);
 					c->aiPanel->GetParent()->Layout();
 					c->aiPanel->SelectTab(0);
-					c->aiPanel->SetStatus("请在画面上按住左键拖拽框选字幕区域（或点击右侧【重试】）");
+					c->aiPanel->SetStatus("拖拽框选画面区域");
 				}
 			}
 		}
@@ -63,7 +63,7 @@ namespace {
 		CMD_TYPE(COMMAND_VALIDATE)
 		wxString StrMenu(const agi::Context *) const override { return to_wx("音频翻译选中行"); }
 		wxString StrDisplay(const agi::Context *) const override { return to_wx("音频翻译"); }
-		wxString StrHelp() const override { return to_wx("音频翻译选中行：按选中行时间轴切取音频，调用百炼 omni 模型转写并翻译，可一键替换选中行"); }
+		wxString StrHelp() const override { return to_wx("音频翻译"); }
 
 		wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
 			static const char svg[] =
@@ -98,7 +98,7 @@ namespace {
 		CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
 		wxString StrMenu(const agi::Context *) const override { return to_wx("样式快切面板"); }
 		wxString StrDisplay(const agi::Context *) const override { return to_wx("样式快切"); }
-		wxString StrHelp() const override { return to_wx("样式快切面板：显示或隐藏右侧样式快速切换面板及数字快捷键"); }
+		wxString StrHelp() const override { return to_wx("样式快切"); }
 
 		wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
 			static const char svg[] =
@@ -134,9 +134,9 @@ namespace {
 	struct ai_vad_diarize final : public Command {
 		CMD_NAME("ai/vad_diarize")
 		CMD_TYPE(COMMAND_VALIDATE)
-		wxString StrMenu(const agi::Context *) const override { return to_wx("智能人声切分与说话人识别..."); }
-		wxString StrDisplay(const agi::Context *) const override { return to_wx("语音切分"); }
-		wxString StrHelp() const override { return to_wx("智能人声切分与说话人识别：精准检测说话发声瞬间、结束延长200ms，支持过滤背景乐与按音色匹配角色"); }
+		wxString StrMenu(const agi::Context *) const override { return to_wx("VAD自动分轴..."); }
+		wxString StrDisplay(const agi::Context *) const override { return to_wx("VAD自动分轴"); }
+		wxString StrHelp() const override { return to_wx("VAD自动分轴"); }
 
 		wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
 			static const char svg[] =

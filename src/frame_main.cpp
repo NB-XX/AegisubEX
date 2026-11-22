@@ -262,6 +262,7 @@ void FrameMain::InitContents() {
 	auto EditBox = new SubsEditBox(Panel, context.get());
 
 	StartupLog("Create AI result panel");
+	OPT_SET("Tool/Playback/Review Quick Style")->SetBool(false);
 	aiPanel = new AIResultPanel(Panel, context.get());
 	context->aiPanel = aiPanel;
 	aiPanel->Show(false);
@@ -328,7 +329,7 @@ void FrameMain::UpdateTitle() {
 	newTitle << context->subsController->Filename().filename().wstring();
 
 #ifndef __WXMAC__
-	newTitle << " - Aegisub " << GetAegisubLongVersionString();
+	newTitle << " - Aegisub";
 #endif
 
 #if defined(__WXMAC__)

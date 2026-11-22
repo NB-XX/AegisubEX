@@ -46,10 +46,6 @@
 class DialogMotionTracker : public wxDialog {
 private:
 	agi::Context* c_;
-	std::shared_ptr<std::atomic<bool>> cancel_;
-	std::shared_ptr<std::atomic<bool>> alive_;
-	std::atomic<bool> running_{false};
-	std::thread worker_thread_;
 
 	AssDialogue* target_line_ = nullptr;
 	int start_frame_ = 0;
@@ -64,7 +60,6 @@ private:
 	wxSpinCtrl* box_y_ctrl_ = nullptr;
 	wxSpinCtrl* box_w_ctrl_ = nullptr;
 	wxSpinCtrl* box_h_ctrl_ = nullptr;
-	wxButton* pick_box_btn_ = nullptr;
 
 	wxSpinCtrl* ref_frame_ctrl_ = nullptr;
 	wxButton* set_cur_frame_btn_ = nullptr;
@@ -80,13 +75,9 @@ private:
 	wxCheckBox* chk_fold_in_grid_ = nullptr;
 	wxCheckBox* chk_backup_ = nullptr;
 
-	wxGauge* progress_gauge_ = nullptr;
-	wxStaticText* status_lbl_ = nullptr;
-
 	wxButton* btn_track_and_apply_ = nullptr;
 	wxButton* btn_repick_ = nullptr;
 	wxButton* btn_copy_mocha_ = nullptr;
-	wxButton* btn_cancel_ = nullptr;
 	wxButton* btn_close_ = nullptr;
 
 	MotionTrack::MotionTrajectory last_trajectory_;
@@ -131,18 +122,15 @@ private:
 			box_y_ctrl_->SetValue(y0);
 			box_w_ctrl_->SetValue(x1 - x0);
 			box_h_ctrl_->SetValue(y1 - y0);
-			status_lbl_->SetLabel(fmt_wx("已选择花字选框: [%d, %d] 宽:%d 高:%d", x0, y0, x1 - x0, y1 - y0));
 		}
 	}
 
 public:
 	DialogMotionTracker(wxWindow* parent, agi::Context* c)
-	: wxDialog(parent, wxID_ANY, to_wx("视频运动追踪与相对位移"),
-		wxDefaultPosition, wxSize(620, 680),
+	: wxDialog(parent, wxID_ANY, to_wx("视频运动追踪"),
+		wxDefaultPosition, wxSize(560, 520),
 		wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 	, c_(c)
-	, cancel_(std::make_shared<std::atomic<bool>>(false))
-	, alive_(std::make_shared<std::atomic<bool>>(true))
 	{
 		auto* main_sizer = new wxBoxSizer(wxVERTICAL);
 
@@ -162,8 +150,8 @@ public:
 
 		main_sizer->Add(info_sizer, 0, wxEXPAND | wxALL, 8);
 
-		// 2. 追踪目标选框
-		auto* box_box = new wxStaticBox(this, wxID_ANY, to_wx("运动花字目标选框 (ROI)"));
+		// 2. 追踪目标框
+		auto* box_box = new wxStaticBox(this, wxID_ANY, to_wx("追踪目标框"));
 		auto* box_sizer = new wxStaticBoxSizer(box_box, wxVERTICAL);
 
 		auto* coord_sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -173,23 +161,19 @@ public:
 		box_h_ctrl_ = new wxSpinCtrl(box_box, wxID_ANY, "80", wxDefaultPosition, wxSize(70, -1), wxSP_ARROW_KEYS, 10, 2048, 80);
 
 		coord_sizer->Add(new wxStaticText(box_box, wxID_ANY, to_wx("X:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-		coord_sizer->Add(box_x_ctrl_, 0, wxRIGHT, 8);
+		coord_sizer->Add(box_x_ctrl_, 0, wxRIGHT, 10);
 		coord_sizer->Add(new wxStaticText(box_box, wxID_ANY, to_wx("Y:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-		coord_sizer->Add(box_y_ctrl_, 0, wxRIGHT, 8);
+		coord_sizer->Add(box_y_ctrl_, 0, wxRIGHT, 10);
 		coord_sizer->Add(new wxStaticText(box_box, wxID_ANY, to_wx("宽:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-		coord_sizer->Add(box_w_ctrl_, 0, wxRIGHT, 8);
+		coord_sizer->Add(box_w_ctrl_, 0, wxRIGHT, 10);
 		coord_sizer->Add(new wxStaticText(box_box, wxID_ANY, to_wx("高:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
-		coord_sizer->Add(box_h_ctrl_, 0, wxRIGHT, 12);
-
-		pick_box_btn_ = new wxButton(box_box, wxID_ANY, to_wx("🎯 重新在画面上框选花字"));
-		pick_box_btn_->SetToolTip(to_wx("关闭此设置面板，回到视频画面上重新拖拽框选花字，框选完毕后自动重新弹出本面板"));
-		coord_sizer->Add(pick_box_btn_, 1, wxALIGN_CENTER_VERTICAL);
+		coord_sizer->Add(box_h_ctrl_, 0);
 
 		box_sizer->Add(coord_sizer, 0, wxEXPAND | wxALL, 6);
 		main_sizer->Add(box_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-		// 3. 基准参考帧设置
-		auto* ref_box = new wxStaticBox(this, wxID_ANY, to_wx("对齐基准参考帧 (Reference Frame)"));
+		// 3. 基准帧设置
+		auto* ref_box = new wxStaticBox(this, wxID_ANY, to_wx("基准帧"));
 		auto* ref_sizer = new wxStaticBoxSizer(ref_box, wxVERTICAL);
 
 		auto* ref_row = new wxBoxSizer(wxHORIZONTAL);
@@ -197,91 +181,73 @@ public:
 		ref_frame_ctrl_ = new wxSpinCtrl(ref_box, wxID_ANY, "0", wxDefaultPosition, wxSize(100, -1), wxSP_ARROW_KEYS, 0, 9999999, 0);
 		ref_row->Add(ref_frame_ctrl_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 10);
 
-		set_cur_frame_btn_ = new wxButton(ref_box, wxID_ANY, to_wx("设为当前播放指针所在帧"));
+		set_cur_frame_btn_ = new wxButton(ref_box, wxID_ANY, to_wx("设为当前帧"));
 		ref_row->Add(set_cur_frame_btn_, 0, wxALIGN_CENTER_VERTICAL);
 
 		ref_sizer->Add(ref_row, 0, wxEXPAND | wxALL, 6);
-		auto* ref_hint = new wxStaticText(ref_box, wxID_ANY, to_wx("说明：在此帧将字幕调到满意的位置。追踪时字幕将以此帧为锚点，跟随花字做相对运动。"));
-		ref_hint->SetForegroundColour(wxColour(110, 110, 110));
-		ref_sizer->Add(ref_hint, 0, wxLEFT | wxRIGHT | wxBOTTOM, 6);
-
 		main_sizer->Add(ref_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-		// 4. 运动模式与平滑选项
-		auto* opt_box = new wxStaticBox(this, wxID_ANY, to_wx("运动模式与平滑处理"));
+		// 4. 追踪设置
+		auto* opt_box = new wxStaticBox(this, wxID_ANY, to_wx("追踪设置"));
 		auto* opt_sizer = new wxStaticBoxSizer(opt_box, wxVERTICAL);
 
-		rb_relative_ = new wxRadioButton(opt_box, wxID_ANY, to_wx("相对位移运动 (推荐：字幕保持与花字的相对轨迹同步运动)"), wxDefaultPosition, wxDefaultSize, wxRB_GROUP);
+		rb_relative_ = new wxRadioButton(opt_box, wxID_ANY, to_wx("相对位移（保持相对轨迹）"), wxDefaultPosition, wxDefaultSize, wxRB_GROUP);
 		rb_relative_->SetValue(true);
 		opt_sizer->Add(rb_relative_, 0, wxALL, 4);
 
-		rb_absolute_ = new wxRadioButton(opt_box, wxID_ANY, to_wx("绝对坐标跟随 (字幕中心直接跟随花字追踪框中心)"));
+		rb_absolute_ = new wxRadioButton(opt_box, wxID_ANY, to_wx("绝对坐标（直接跟随目标中心）"));
 		opt_sizer->Add(rb_absolute_, 0, wxALL, 4);
 
-		auto* grid_opts = new wxFlexGridSizer(2, wxSize(10, 6));
-		chk_smooth_ = new wxCheckBox(opt_box, wxID_ANY, to_wx("轨迹平滑滤波 (去除视频高频微抖动)"));
+		auto* grid_opts = new wxFlexGridSizer(2, wxSize(16, 6));
+		chk_smooth_ = new wxCheckBox(opt_box, wxID_ANY, to_wx("轨迹平滑"));
 		chk_smooth_->SetValue(true);
 		grid_opts->Add(chk_smooth_, 0, wxALIGN_CENTER_VERTICAL);
 
 		auto* win_sizer = new wxBoxSizer(wxHORIZONTAL);
-		win_sizer->Add(new wxStaticText(opt_box, wxID_ANY, to_wx("平滑窗口:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+		win_sizer->Add(new wxStaticText(opt_box, wxID_ANY, to_wx("窗口:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
 		spin_smooth_win_ = new wxSpinCtrl(opt_box, wxID_ANY, "3", wxDefaultPosition, wxSize(70, -1), wxSP_ARROW_KEYS, 1, 9, 3);
 		win_sizer->Add(spin_smooth_win_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
 		win_sizer->Add(new wxStaticText(opt_box, wxID_ANY, to_wx("帧")), 0, wxALIGN_CENTER_VERTICAL);
 		grid_opts->Add(win_sizer, 0, wxALIGN_CENTER_VERTICAL);
 
-		chk_split_frame_ = new wxCheckBox(opt_box, wxID_ANY, to_wx("逐帧切分生成字幕 (1 行 / 帧，带精确 \\pos)"));
+		chk_split_frame_ = new wxCheckBox(opt_box, wxID_ANY, to_wx("逐帧生成字幕"));
 		chk_split_frame_->SetValue(true);
 		grid_opts->Add(chk_split_frame_, 0, wxALIGN_CENTER_VERTICAL);
 
 		auto* radius_sizer = new wxBoxSizer(wxHORIZONTAL);
 		radius_sizer->Add(new wxStaticText(opt_box, wxID_ANY, to_wx("搜索半径:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
 		spin_search_radius_ = new wxSpinCtrl(opt_box, wxID_ANY, "40", wxDefaultPosition, wxSize(75, -1), wxSP_ARROW_KEYS, 15, 300, 40);
-		spin_search_radius_->SetToolTip(to_wx("单帧最大位移搜索半径。若花字运动较快、位移大或停留在原地没有跟随，请调大此值（如 80~160px 或更高）"));
+		spin_search_radius_->SetToolTip(to_wx("单帧最大位移搜索范围；目标运动较快或停留原地时可调大（如 80~160px）"));
 		radius_sizer->Add(spin_search_radius_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
 		radius_sizer->Add(new wxStaticText(opt_box, wxID_ANY, to_wx("px")), 0, wxALIGN_CENTER_VERTICAL);
 		grid_opts->Add(radius_sizer, 0, wxALIGN_CENTER_VERTICAL);
 
-		chk_backup_ = new wxCheckBox(opt_box, wxID_ANY, to_wx("保留原字幕为注释行备份 (支持随时 Ctrl+Z 一键撤销)"));
+		chk_backup_ = new wxCheckBox(opt_box, wxID_ANY, to_wx("备份原字幕行"));
 		chk_backup_->SetValue(true);
 		grid_opts->Add(chk_backup_, 0, wxALIGN_CENTER_VERTICAL);
 
-		chk_merge_static_ = new wxCheckBox(opt_box, wxID_ANY, to_wx("静止帧智能合并 (定格/静止帧自动合并为单行)"));
+		chk_merge_static_ = new wxCheckBox(opt_box, wxID_ANY, to_wx("合并静止帧"));
 		chk_merge_static_->SetValue(true);
-		chk_merge_static_->SetToolTip(to_wx("当花字飞入定格或位移不动时，自动将连续多帧合并为单行并延长其时间区间，极大减少冗余字幕行"));
 		grid_opts->Add(chk_merge_static_, 0, wxALIGN_CENTER_VERTICAL);
 
-		chk_fold_in_grid_ = new wxCheckBox(opt_box, wxID_ANY, to_wx("字幕列表中折叠显示 (折叠为 1 行摘要，双击展开)"));
+		chk_fold_in_grid_ = new wxCheckBox(opt_box, wxID_ANY, to_wx("列表中折叠显示"));
 		chk_fold_in_grid_->SetValue(true);
-		chk_fold_in_grid_->SetToolTip(to_wx("在字幕列表中将全部追踪帧折叠为单行摘要 (▶ [运动追踪])，保持时间轴清爽；双击该行可随时展开/收起"));
 		grid_opts->Add(chk_fold_in_grid_, 0, wxALIGN_CENTER_VERTICAL);
 
 		opt_sizer->Add(grid_opts, 0, wxEXPAND | wxALL, 6);
 		main_sizer->Add(opt_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-		// 5. 进度条与状态
-		progress_gauge_ = new wxGauge(this, wxID_ANY, 100);
-		main_sizer->Add(progress_gauge_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
-
-		status_lbl_ = new wxStaticText(this, wxID_ANY, to_wx("就绪。点击开始后将在底部状态栏后台追踪，期间可继续编辑其他字幕。"));
-		status_lbl_->SetForegroundColour(wxColour(100, 100, 100));
-		main_sizer->Add(status_lbl_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
-
-		// 6. 操作按钮
+		// 5. 操作按钮
 		auto* btn_sizer = new wxBoxSizer(wxHORIZONTAL);
-		btn_track_and_apply_ = new wxButton(this, wxID_ANY, to_wx("⚡ 一键追踪并应用到字幕"));
+		btn_track_and_apply_ = new wxButton(this, wxID_ANY, to_wx("开始追踪"));
 		btn_track_and_apply_->SetDefault();
-		btn_repick_ = new wxButton(this, wxID_ANY, to_wx("🎯 重新框选"));
-		btn_repick_->SetToolTip(to_wx("关闭面板并在视频画面上重新拖拽框选花字目标"));
-		btn_copy_mocha_ = new wxButton(this, wxID_ANY, to_wx("📋 复制 Mocha 关键帧数据"));
-		btn_cancel_ = new wxButton(this, wxID_ANY, to_wx("取消"));
-		btn_cancel_->Disable();
+		btn_repick_ = new wxButton(this, wxID_ANY, to_wx("重新框选"));
+		btn_copy_mocha_ = new wxButton(this, wxID_ANY, to_wx("复制 Mocha 数据"));
 		btn_close_ = new wxButton(this, wxID_ANY, to_wx("关闭"));
 
 		btn_sizer->Add(btn_track_and_apply_, 0, wxRIGHT, 6);
 		btn_sizer->Add(btn_repick_, 0, wxRIGHT, 6);
 		btn_sizer->Add(btn_copy_mocha_, 0, wxRIGHT, 6);
-		btn_sizer->Add(btn_cancel_, 0, wxRIGHT, 6);
 		btn_sizer->AddStretchSpacer(1);
 		btn_sizer->Add(btn_close_, 0);
 
@@ -299,16 +265,9 @@ public:
 			box_y_ctrl_->SetValue(y0);
 			box_w_ctrl_->SetValue(x1 - x0);
 			box_h_ctrl_->SetValue(y1 - y0);
-			status_lbl_->SetLabel(fmt_wx("已选框选目标: [%d, %d] 宽:%d 高:%d", x0, y0, x1 - x0, y1 - y0));
-		});
-
-		pick_box_btn_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-			if (running_) return;
-			EndModal(1001);
 		});
 
 		btn_repick_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-			if (running_) return;
 			EndModal(1001);
 		});
 
@@ -321,29 +280,16 @@ public:
 		btn_track_and_apply_->Bind(wxEVT_BUTTON, &DialogMotionTracker::OnTrackAndApply, this);
 		btn_copy_mocha_->Bind(wxEVT_BUTTON, &DialogMotionTracker::OnCopyMochaData, this);
 
-		btn_cancel_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-			if (running_) {
-				cancel_->store(true);
-				status_lbl_->SetLabel(to_wx("正在取消追踪..."));
-				btn_cancel_->Disable();
-			}
-		});
-
 		btn_close_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-			if (running_) cancel_->store(true);
 			EndModal(wxID_CANCEL);
 		});
 	}
 
 	~DialogMotionTracker() override {
 		VisualToolMotionTrack::SetBoxCallback(nullptr);
-		if (alive_) alive_->store(false);
-		if (running_) cancel_->store(true);
-		if (worker_thread_.joinable()) worker_thread_.join();
 	}
 
 	void OnTrackAndApply(wxCommandEvent&) {
-		if (running_) return;
 		if (!c_ || !c_->project || !c_->project->VideoProvider()) {
 			wxMessageBox(to_wx("请先打开视频文件。"), to_wx("提示"), wxOK | wxICON_WARNING, this);
 			return;

@@ -17,6 +17,7 @@
 #include <wx/dialog.h>
 #include <libaegisub/color.h>
 #include <string>
+#include <vector>
 
 class wxCheckBox;
 class wxComboBox;
@@ -82,6 +83,19 @@ LocalStyleState AnalyzeLocalStyleSelectionState(agi::Context *c, int sel_start, 
 bool TryExpandAdjacentStyleOverrides(const std::string &text, int &sel_start, int &sel_end, LocalStyleTagFamily specific_family = LocalStyleTagFamily::UNKNOWN);
 std::string MergeLocalStyleTags(const std::string &sel, const std::string &opening_tag, const std::string &closing_tag);
 void ApplyLocalStyleTags(agi::Context *c, int sel_start, int sel_end, const std::string &opening_tag, const std::string &closing_tag);
+
+struct LocalStylePreset {
+	LocalStyleState state;
+	std::string label;
+	std::string opening_tag;
+};
+
+std::string BuildOpeningTagFromState(const LocalStyleState &s);
+std::string BuildClosingTagFromState(const LocalStyleState &s, const LocalStyleState &pre_state);
+std::string FormatLocalStylePresetLabel(const LocalStyleState &s);
+const std::vector<LocalStylePreset>& GetLocalStyleHistory();
+void RecordLocalStyleHistory(const LocalStyleState &s);
+void ApplyLocalStylePreset(agi::Context *c, int sel_start, int sel_end, const LocalStylePreset &preset);
 
 /// Dialog for adjusting style tags for a selected range of text without affecting surrounding text
 class DialogLocalStyle final : public wxDialog {

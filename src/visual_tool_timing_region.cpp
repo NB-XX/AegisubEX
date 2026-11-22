@@ -824,7 +824,7 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 		return a->Row < b->Row;
 	});
 	if (!HasPresetRegion()) {
-		wxMessageBox(_("Pick a subtitle region with Frame Match before running batch matching."), _("Batch Frame Match"), wxOK | wxICON_INFORMATION, context->parent);
+		wxMessageBox(to_wx("请先用“视觉对帧”框选字幕区域。"), to_wx("批量对帧"), wxOK | wxICON_INFORMATION, context->parent);
 		return;
 	}
 	if (provider->GetFrameCount() <= 0) return;
@@ -1106,19 +1106,14 @@ void VisualToolTimingRegion::BatchMatchSelection(agi::Context *context) {
 			}
 
 			if (ctx->frame) {
-				wxString mode_label;
-				if (engine_mode == 0) mode_label = to_wx("智能双模");
-				else if (engine_mode == 1) mode_label = to_wx("深度学习笔画检测");
-				else mode_label = to_wx("经典原生像素");
-
 				if (skipped > 0) {
 					ctx->frame->StatusTimeout(wxString::Format(
-						to_wx("批量对帧完成：已更新 %d 行，跳过 %d 行（选区内未检出文字）[模式: %s]"),
-						changed, skipped, mode_label), 6000);
+						to_wx("批量对帧完成：已更新 %d 行，跳过 %d 行（未检出文字）"),
+						changed, skipped), 6000);
 				} else {
 					ctx->frame->StatusTimeout(wxString::Format(
-						to_wx("批量对帧完成：已更新 %d 行时间轴 [模式: %s]"),
-						changed, mode_label), 6000);
+						to_wx("批量对帧完成：已更新 %d 行"),
+						changed), 6000);
 				}
 			}
 		});
@@ -1345,7 +1340,7 @@ void VisualToolTimingRegion::DetectInterval() {
 	auto provider = c->project->VideoProvider();
 	auto line = c->selectionController->GetActiveLine();
 	if (!provider || !line) {
-		wxMessageBox(_("Select a subtitle line, pause on a frame where its source subtitle is visible, then drag a tight box around the whole source subtitle."), _("Frame Match Assistant"), wxOK | wxICON_INFORMATION, parent);
+		wxMessageBox(to_wx("请先选中字幕行，停在字幕可见帧后，在画面上框选字幕区域。"), to_wx("视觉对帧"), wxOK | wxICON_INFORMATION, parent);
 		return;
 	}
 	if (c->bgTasks && c->bgTasks->IsLineLocked(line)) {
@@ -1354,7 +1349,7 @@ void VisualToolTimingRegion::DetectInterval() {
 		return;
 	}
 	if (script_res.X() <= 0 || script_res.Y() <= 0 || provider->GetWidth() <= 0 || provider->GetHeight() <= 0) {
-		wxMessageBox(_("Video or script dimensions are not available."), _("Frame Match Assistant"), wxOK | wxICON_WARNING, parent);
+		wxMessageBox(to_wx("视频或脚本分辨率不可用。"), to_wx("视觉对帧"), wxOK | wxICON_WARNING, parent);
 		return;
 	}
 
@@ -1375,12 +1370,12 @@ void VisualToolTimingRegion::DetectInterval() {
 	}
 
 	if (x1 - x0 < 8 || y1 - y0 < 6) {
-		wxMessageBox(_("The selected area is too small. Drag a box or vertical anchor around the subtitle."), _("Frame Match Assistant"), wxOK | wxICON_WARNING, parent);
+		wxMessageBox(to_wx("选区过小，请在字幕文字周围拖拽出更完整的框或竖线锚点。"), to_wx("视觉对帧"), wxOK | wxICON_WARNING, parent);
 		return;
 	}
 	int frame_count = provider->GetFrameCount();
 	if (frame_count <= 0) {
-		wxMessageBox(_("The loaded video has no frames."), _("Frame Match Assistant"), wxOK | wxICON_WARNING, parent);
+		wxMessageBox(to_wx("当前视频没有有效帧。"), to_wx("视觉对帧"), wxOK | wxICON_WARNING, parent);
 		return;
 	}
 
@@ -1402,7 +1397,6 @@ void VisualToolTimingRegion::DetectInterval() {
 	MatchVideoView view = MakeSharedVideoView(provider, c->project->Timecodes());
 	int new_start = 0, new_end = 0;
 	int status = kMatchOk;
-	int engine_used = 0;
 	bool ok = false;
 	MaskCache cache;
 	try {
@@ -1411,7 +1405,7 @@ void VisualToolTimingRegion::DetectInterval() {
 			[&](int samples) {
 				wxSafeYield(parent, true);
 				return progress.Update(std::min(samples, total_work));
-			}, &status, &cache, -1, &engine_used, is_anchor_mode);
+			}, &status, &cache, -1, nullptr, is_anchor_mode);
 
 		// 智能自适应兜底：若当前画面暂停帧未能提取到清晰图案（例如停留在无字/提前淡出时刻）
 		// 自动在当前字幕行的时间中点 (Start + End) / 2 所对应的画面帧重试
@@ -1420,33 +1414,31 @@ void VisualToolTimingRegion::DetectInterval() {
 			int mid_frame = std::clamp(c->videoController->FrameAtTime(mid_time, agi::vfr::START), 0, frame_count - 1);
 			if (mid_frame != reference_frame) {
 				int retry_status = kMatchOk;
-				int retry_engine = 0;
 				MaskCache retry_cache;
 				bool retry_ok = MatchLineToRegion(view, line->Start, line->End, PixelRegion{x0, y0, x1, y1}, mid_frame, new_start, new_end,
 					minimum_similarity, engine_mode, -1, -1,
 					[&](int samples) {
 						wxSafeYield(parent, true);
 						return progress.Update(std::min(samples, total_work));
-					}, &retry_status, &retry_cache, -1, &retry_engine, is_anchor_mode);
+					}, &retry_status, &retry_cache, -1, nullptr, is_anchor_mode);
 				if (retry_ok && retry_status == kMatchOk) {
 					ok = true;
 					status = retry_status;
-					engine_used = retry_engine;
 				}
 			}
 		}
 	}
 	catch (std::exception const& e) {
-		wxMessageBox(_("Could not scan video frames: ") + to_wx(e.what()), _("Frame Match Assistant"), wxOK | wxICON_ERROR, parent);
+		wxMessageBox(to_wx("无法扫描视频帧：") + to_wx(e.what()), to_wx("视觉对帧"), wxOK | wxICON_ERROR, parent);
 		return;
 	}
 	if (status == kMatchCancelled) return;
 	if (status == kMatchNoPattern) {
-		wxMessageBox(_("No clear subtitle-color pattern was found in this box. Pause while the subtitle is visible and draw a tighter box around its text."), _("Frame Match Assistant"), wxOK | wxICON_INFORMATION, parent);
+		wxMessageBox(to_wx("选区内未检出清晰字幕，请在字幕可见帧重新框选文字区域。"), to_wx("视觉对帧"), wxOK | wxICON_INFORMATION, parent);
 		return;
 	}
 	if (!ok || status == kMatchInvalid) {
-		wxMessageBox(_("The selected region did not produce a valid interval. Adjust the box or similarity threshold and try again."), _("Frame Match Assistant"), wxOK | wxICON_INFORMATION, parent);
+		wxMessageBox(to_wx("选区未能匹配到有效时间区间，请调整选框或相似度后重试。"), to_wx("视觉对帧"), wxOK | wxICON_INFORMATION, parent);
 		return;
 	}
 
@@ -1457,15 +1449,10 @@ void VisualToolTimingRegion::DetectInterval() {
 	c->selectionController->SetActiveLine(line);
 	c->videoController->JumpToTime(line->Start);
 
-	wxString used_desc;
-	if (engine_used == 1) used_desc = to_wx("文字笔画检测（GPU硬件加速）");
-	else used_desc = to_wx("经典原生像素匹配");
-
 	if (c->frame) {
 		c->frame->SetStatusText(wxString::Format(
-			to_wx("视觉对帧完成：%s - %s [引擎: %s]"),
+			to_wx("视觉对帧完成：%s - %s"),
 			to_wx(agi::Time(new_start).GetAssFormatted()),
-			to_wx(agi::Time(new_end).GetAssFormatted()),
-			used_desc));
+			to_wx(agi::Time(new_end).GetAssFormatted())));
 	}
 }

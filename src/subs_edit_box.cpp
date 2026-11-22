@@ -426,7 +426,7 @@ void SubsEditBox::OnActiveLineChanged(AssDialogue *new_line) {
 
 void SubsEditBox::OnReviewModeChanged(bool active) {
 	review_mode = active;
-	SetControlsState(!!line);
+	SetControlsState(line && (!c->bgTasks || !c->bgTasks->IsLineLocked(line)));
 	if (active) {
 		focus_timer.Start(120);
 		c->videoController->OnEditAreaFocus(IsFocusInEditArea());
@@ -443,8 +443,12 @@ void SubsEditBox::OnReviewModeChanged(bool active) {
 /// Polling FindFocus() is far more reliable than SET/KILL_FOCUS events, which
 /// Scintilla and some native controls swallow without propagating.
 void SubsEditBox::OnFocusPoll(wxTimerEvent &) {
-	if (review_mode)
-		c->videoController->OnEditAreaFocus(IsFocusInEditArea());
+	if (!review_mode) return;
+	wxWindow *focus = wxWindow::FindFocus();
+	// 弹窗（如样式快切/局部样式弹窗/浮动工具栏）或切到外部窗口时保持当前暂停状态，不误恢复播放
+	if (!focus || wxGetTopLevelParent(focus) != wxGetTopLevelParent(this))
+		return;
+	c->videoController->OnEditAreaFocus(IsFocusInEditArea());
 }
 
 bool SubsEditBox::IsFocusInEditArea() const {

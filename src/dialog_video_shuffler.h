@@ -94,7 +94,6 @@ private:
 	wxStaticText* subs_info_lbl_ = nullptr;
 
 	wxRadioButton* rb_mode_highlight_ = nullptr;
-	wxRadioButton* rb_mode_chapters_ = nullptr;
 	wxRadioButton* rb_mode_selected_ = nullptr;
 
 	wxSpinCtrl* spin_gap_threshold_ = nullptr;
@@ -116,8 +115,6 @@ private:
 	wxButton* browse_dir_btn_ = nullptr;
 	wxTextCtrl* prefix_ctrl_ = nullptr;
 	wxCheckBox* chk_sync_ass_ = nullptr;
-
-	wxListBox* chapter_list_ = nullptr;
 
 	wxGauge* progress_gauge_ = nullptr;
 	wxStaticText* status_lbl_ = nullptr;
@@ -153,22 +150,22 @@ private:
 		bool vid_exists = !vid_path.empty() && std::filesystem::exists(vid_path, f_ec);
 
 		if (vid_path.empty()) {
-			video_info_lbl_->SetLabel(to_wx("⚠️ 当前工程未载入视频！请先在 Aegisub 中打开视频 (视轨 -> 打开视频...)"));
+			video_info_lbl_->SetLabel(to_wx("未载入视频，请先打开视频"));
 			video_info_lbl_->SetForegroundColour(wxColour(200, 50, 50));
 			btn_start_->Disable();
 		} else if (!vid_exists) {
-			video_info_lbl_->SetLabel(fmt_wx("⚠️ 视频源文件不存在: %s", vid_path.wstring()));
+			video_info_lbl_->SetLabel(fmt_wx("视频文件不存在: %s", vid_path.wstring()));
 			video_info_lbl_->SetForegroundColour(wxColour(200, 50, 50));
 			btn_start_->Disable();
 		} else {
 			auto provider = c_->project->VideoProvider();
 			if (provider) {
 				video_duration_ms_ = static_cast<int>(provider->GetFrameCount() * 1000.0 / provider->GetFPS().FPS());
-				video_info_lbl_->SetLabel(fmt_wx("当前视频: %s  (分辨率: %dx%d, 帧率: %.2ffps, 时长: %s)",
+				video_info_lbl_->SetLabel(fmt_wx("视频: %s (%dx%d, %.2ffps, %s)",
 					vid_path.filename().wstring(), provider->GetWidth(), provider->GetHeight(),
 					provider->GetFPS().FPS(), to_wx(VideoShuffler::FormatMsDuration(video_duration_ms_))));
 			} else {
-				video_info_lbl_->SetLabel(fmt_wx("当前视频: %s", vid_path.filename().wstring()));
+				video_info_lbl_->SetLabel(fmt_wx("视频: %s", vid_path.filename().wstring()));
 			}
 			video_info_lbl_->SetForegroundColour(wxColour(30, 130, 30));
 
@@ -184,10 +181,10 @@ private:
 		// 检测 FFmpeg 引擎状态
 		std::wstring detected_ffmpeg = VideoShuffler::FindFFmpegExecutable(s_custom_ffmpeg_path);
 		if (!detected_ffmpeg.empty()) {
-			ffmpeg_status_lbl_->SetLabel(fmt_wx("🟢 FFmpeg 就绪: %s", detected_ffmpeg));
+			ffmpeg_status_lbl_->SetLabel(fmt_wx("FFmpeg: %s", detected_ffmpeg));
 			ffmpeg_status_lbl_->SetForegroundColour(wxColour(30, 130, 30));
 		} else {
-			ffmpeg_status_lbl_->SetLabel(to_wx("🔴 未检测到 FFmpeg 引擎 (请点击右侧按钮选择 ffmpeg.exe 或将其加入 PATH)"));
+			ffmpeg_status_lbl_->SetLabel(to_wx("未检测到 FFmpeg，请指定 ffmpeg.exe"));
 			ffmpeg_status_lbl_->SetForegroundColour(wxColour(200, 30, 30));
 		}
 
@@ -195,22 +192,12 @@ private:
 		int total_lines = 0;
 		int dialogue_lines = 0;
 		int comment_lines = 0;
-		int chapter_count = 0;
-
-		std::vector<std::string> found_chapters;
 
 		if (c_->ass) {
 			for (auto& entry : c_->ass->Events) {
 				total_lines++;
 				if (entry.Comment) {
 					comment_lines++;
-					std::string text = entry.Text.get();
-					size_t first = text.find_first_not_of(" \t\r\n");
-					std::string tr = (first == std::string::npos) ? "" : text.substr(first);
-					if (tr.starts_with("#")) {
-						chapter_count++;
-						found_chapters.push_back(tr);
-					}
 				} else {
 					dialogue_lines++;
 				}
@@ -222,18 +209,8 @@ private:
 			selected_lines_ = c_->selectionController->GetSelectedSet();
 		}
 
-		subs_info_lbl_->SetLabel(fmt_wx("字幕统计: 共 %d 行 (有效对话 %d 行, 注释/跳过 %d 行, 识别章节 %d 个, 选中行 %d 行)",
-			total_lines, dialogue_lines, comment_lines, chapter_count, static_cast<int>(selected_lines_.size())));
-
-		// 填充章节列表
-		chapter_list_->Clear();
-		if (!found_chapters.empty()) {
-			for (const auto& ch : found_chapters) {
-				chapter_list_->Append(to_wx(ch));
-			}
-		} else {
-			chapter_list_->Append(to_wx("（未检测到以 # 命名的章节注释行。插入形如 Comment: # 序章 即可切片）"));
-		}
+		subs_info_lbl_->SetLabel(fmt_wx("字幕统计: 共 %d 行 (有效对话 %d 行, 注释/跳过 %d 行, 选中行 %d 行)",
+			total_lines, dialogue_lines, comment_lines, static_cast<int>(selected_lines_.size())));
 
 		if (selected_lines_.empty()) {
 			rb_mode_selected_->Disable();
@@ -244,7 +221,7 @@ private:
 
 public:
 	DialogVideoShuffler(wxWindow* parent, agi::Context* c)
-	: wxDialog(parent, wxID_ANY, to_wx("按字幕切分与合并视频"), wxDefaultPosition, wxSize(780, 750),
+	: wxDialog(parent, wxID_ANY, to_wx("按字幕切分与合并视频"), wxDefaultPosition, wxSize(740, 560),
 	           wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 	, c_(c)
 	, alive_(std::make_shared<std::atomic<bool>>(true))
@@ -252,87 +229,82 @@ public:
 	{
 		auto* main_sizer = new wxBoxSizer(wxVERTICAL);
 
-		// 1. 顶部视频与字幕状态信息
-		auto* info_box = new wxStaticBox(this, wxID_ANY, to_wx("当前工程媒体与字幕源"));
+		// 1. 工程信息
+		auto* info_box = new wxStaticBox(this, wxID_ANY, to_wx("工程信息"));
 		auto* info_sizer = new wxStaticBoxSizer(info_box, wxVERTICAL);
 
-		video_info_lbl_ = new wxStaticText(info_box, wxID_ANY, to_wx("正在读取视频信息..."));
-		subs_info_lbl_ = new wxStaticText(info_box, wxID_ANY, to_wx("正在统计字幕行..."));
+		video_info_lbl_ = new wxStaticText(info_box, wxID_ANY, "");
+		subs_info_lbl_ = new wxStaticText(info_box, wxID_ANY, "");
 		subs_info_lbl_->SetForegroundColour(wxColour(80, 80, 80));
 
 		info_sizer->Add(video_info_lbl_, 0, wxALL, 4);
 		info_sizer->Add(subs_info_lbl_, 0, wxLEFT | wxRIGHT | wxBOTTOM, 4);
 		main_sizer->Add(info_sizer, 0, wxEXPAND | wxALL, 8);
 
-		// 2. 切分/合并模式选择
-		auto* mode_box = new wxStaticBox(this, wxID_ANY, to_wx("剪辑与重组模式 (Operation Mode)"));
+		// 2. 模式选择
+		auto* mode_box = new wxStaticBox(this, wxID_ANY, to_wx("模式"));
 		auto* mode_sizer = new wxStaticBoxSizer(mode_box, wxVERTICAL);
 
 		rb_mode_highlight_ = new wxRadioButton(mode_box, wxID_ANY,
-			to_wx("🚀 智能精简剪辑 (自动剔除无声空白与废话注释，合并为一个精华视频)"),
+			to_wx("剪辑所有行"),
 			wxDefaultPosition, wxDefaultSize, wxRB_GROUP);
 		rb_mode_highlight_->SetValue(true);
 
-		rb_mode_chapters_ = new wxRadioButton(mode_box, wxID_ANY,
-			to_wx("📑 按章节注释批量切片 (# 章节名 / ## 小节名，导出各个独立分段文件)"));
-
 		rb_mode_selected_ = new wxRadioButton(mode_box, wxID_ANY,
-			to_wx("🎯 仅切分当前选中的字幕行 (快速切取高光片段)"));
+			to_wx("剪辑选中行"));
 
 		mode_sizer->Add(rb_mode_highlight_, 0, wxALL, 3);
-		mode_sizer->Add(rb_mode_chapters_, 0, wxALL, 3);
 		mode_sizer->Add(rb_mode_selected_, 0, wxALL, 3);
 		main_sizer->Add(mode_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-		// 3. 剪辑参数与缓冲配置
-		auto* param_box = new wxStaticBox(this, wxID_ANY, to_wx("剪辑缓冲与间隙参数 (Padding & Gap Threshold)"));
+		// 3. 时间缓冲
+		auto* param_box = new wxStaticBox(this, wxID_ANY, to_wx("时间缓冲"));
 		auto* param_sizer = new wxStaticBoxSizer(param_box, wxHORIZONTAL);
 
-		param_sizer->Add(new wxStaticText(param_box, wxID_ANY, to_wx("间隙合并阈值:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+		param_sizer->Add(new wxStaticText(param_box, wxID_ANY, to_wx("间隙合并:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
 		spin_gap_threshold_ = new wxSpinCtrl(param_box, wxID_ANY, "1000", wxDefaultPosition, wxSize(75, -1), wxSP_ARROW_KEYS, 0, 10000, 1000);
 		param_sizer->Add(spin_gap_threshold_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
 		param_sizer->Add(new wxStaticText(param_box, wxID_ANY, to_wx("ms")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 16);
 
-		param_sizer->Add(new wxStaticText(param_box, wxID_ANY, to_wx("起始提前缓冲:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+		param_sizer->Add(new wxStaticText(param_box, wxID_ANY, to_wx("前置:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
 		spin_leadin_ = new wxSpinCtrl(param_box, wxID_ANY, "100", wxDefaultPosition, wxSize(70, -1), wxSP_ARROW_KEYS, 0, 2000, 100);
 		param_sizer->Add(spin_leadin_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
 		param_sizer->Add(new wxStaticText(param_box, wxID_ANY, to_wx("ms")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 16);
 
-		param_sizer->Add(new wxStaticText(param_box, wxID_ANY, to_wx("结尾延后缓冲:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+		param_sizer->Add(new wxStaticText(param_box, wxID_ANY, to_wx("后置:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
 		spin_leadout_ = new wxSpinCtrl(param_box, wxID_ANY, "150", wxDefaultPosition, wxSize(70, -1), wxSP_ARROW_KEYS, 0, 2000, 150);
 		param_sizer->Add(spin_leadout_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
 		param_sizer->Add(new wxStaticText(param_box, wxID_ANY, to_wx("ms")), 0, wxALIGN_CENTER_VERTICAL);
 
 		main_sizer->Add(param_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-		// 4. 编码与格式设置
-		auto* enc_box = new wxStaticBox(this, wxID_ANY, to_wx("编码引擎与输出格式 (Encoding Engine & Format)"));
+		// 4. 导出设置
+		auto* enc_box = new wxStaticBox(this, wxID_ANY, to_wx("导出设置"));
 		auto* enc_sizer = new wxStaticBoxSizer(enc_box, wxVERTICAL);
 
-		// FFmpeg 执行引擎行
 		auto* ffmpeg_row = new wxBoxSizer(wxHORIZONTAL);
-		ffmpeg_status_lbl_ = new wxStaticText(enc_box, wxID_ANY, to_wx("FFmpeg 状态: 检测中..."));
-		btn_browse_ffmpeg_ = new wxButton(enc_box, wxID_ANY, to_wx("选择 FFmpeg..."));
+		ffmpeg_status_lbl_ = new wxStaticText(enc_box, wxID_ANY, "");
+		btn_browse_ffmpeg_ = new wxButton(enc_box, wxID_ANY, to_wx("浏览…"));
 		ffmpeg_row->Add(ffmpeg_status_lbl_, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
 		ffmpeg_row->Add(btn_browse_ffmpeg_, 0, wxALIGN_CENTER_VERTICAL);
 		enc_sizer->Add(ffmpeg_row, 0, wxEXPAND | wxALL, 4);
 
 		auto* enc_row1 = new wxBoxSizer(wxHORIZONTAL);
-		enc_row1->Add(new wxStaticText(enc_box, wxID_ANY, to_wx("编码模式:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-		rb_engine_fast_ = new wxRadioButton(enc_box, wxID_ANY, to_wx("⚡ 超快速无损流复制 (-c copy，秒级导出，原画无损)"), wxDefaultPosition, wxDefaultSize, wxRB_GROUP);
+		enc_row1->Add(new wxStaticText(enc_box, wxID_ANY, to_wx("方式:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+		rb_engine_fast_ = new wxRadioButton(enc_box, wxID_ANY, to_wx("局部重编码"), wxDefaultPosition, wxDefaultSize, wxRB_GROUP);
 		rb_engine_fast_->SetValue(true);
-		rb_engine_reencode_ = new wxRadioButton(enc_box, wxID_ANY, to_wx("🎯 逐帧精准重编码 (x264+aac，毫秒级帧准度)"));
+		rb_engine_reencode_ = new wxRadioButton(enc_box, wxID_ANY, to_wx("全片重编码"));
 		enc_row1->Add(rb_engine_fast_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 12);
 		enc_row1->Add(rb_engine_reencode_, 0, wxALIGN_CENTER_VERTICAL);
 		enc_sizer->Add(enc_row1, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4);
 
 		auto* enc_row2 = new wxBoxSizer(wxHORIZONTAL);
-		enc_row2->Add(new wxStaticText(enc_box, wxID_ANY, to_wx("输出格式:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
-		rb_fmt_mp4_ = new wxRadioButton(enc_box, wxID_ANY, "MP4 (.mp4)", wxDefaultPosition, wxDefaultSize, wxRB_GROUP);
+		enc_row2->Add(new wxStaticText(enc_box, wxID_ANY, to_wx("格式:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+		rb_fmt_mp4_ = new wxRadioButton(enc_box, wxID_ANY, "MP4", wxDefaultPosition, wxDefaultSize, wxRB_GROUP);
 		rb_fmt_mp4_->SetValue(true);
-		rb_fmt_mkv_ = new wxRadioButton(enc_box, wxID_ANY, "MKV (.mkv)");
-		rb_fmt_mp3_ = new wxRadioButton(enc_box, wxID_ANY, to_wx("仅音频 (.mp3)"));
-		rb_fmt_wav_ = new wxRadioButton(enc_box, wxID_ANY, to_wx("仅音频 (.wav)"));
+		rb_fmt_mkv_ = new wxRadioButton(enc_box, wxID_ANY, "MKV");
+		rb_fmt_mp3_ = new wxRadioButton(enc_box, wxID_ANY, "MP3");
+		rb_fmt_wav_ = new wxRadioButton(enc_box, wxID_ANY, "WAV");
 
 		enc_row2->Add(rb_fmt_mp4_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 10);
 		enc_row2->Add(rb_fmt_mkv_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 10);
@@ -342,59 +314,52 @@ public:
 
 		main_sizer->Add(enc_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-		// 5. 输出目录与文件名前缀
-		auto* out_box = new wxStaticBox(this, wxID_ANY, to_wx("输出目录与选项 (Output Path & Options)"));
+		// 5. 输出
+		auto* out_box = new wxStaticBox(this, wxID_ANY, to_wx("输出"));
 		auto* out_sizer = new wxStaticBoxSizer(out_box, wxVERTICAL);
 
 		auto* path_row = new wxBoxSizer(wxHORIZONTAL);
-		path_row->Add(new wxStaticText(out_box, wxID_ANY, to_wx("输出路径:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+		path_row->Add(new wxStaticText(out_box, wxID_ANY, to_wx("输出目录:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
 		out_dir_ctrl_ = new wxTextCtrl(out_box, wxID_ANY, "");
-		browse_dir_btn_ = new wxButton(out_box, wxID_ANY, to_wx("浏览..."));
+		browse_dir_btn_ = new wxButton(out_box, wxID_ANY, to_wx("浏览…"));
 		path_row->Add(out_dir_ctrl_, 1, wxEXPAND | wxRIGHT, 6);
 		path_row->Add(browse_dir_btn_, 0);
 		out_sizer->Add(path_row, 0, wxEXPAND | wxALL, 4);
 
 		auto* opt_row = new wxBoxSizer(wxHORIZONTAL);
-		opt_row->Add(new wxStaticText(out_box, wxID_ANY, to_wx("前缀名称:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
-		prefix_ctrl_ = new wxTextCtrl(out_box, wxID_ANY, "", wxDefaultPosition, wxSize(180, -1));
-		opt_row->Add(prefix_ctrl_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 16);
+		opt_row->Add(new wxStaticText(out_box, wxID_ANY, to_wx("文件前缀:")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+		prefix_ctrl_ = new wxTextCtrl(out_box, wxID_ANY, "");
+		opt_row->Add(prefix_ctrl_, 1, wxEXPAND | wxALIGN_CENTER_VERTICAL | wxRIGHT, 16);
 
-		chk_sync_ass_ = new wxCheckBox(out_box, wxID_ANY, to_wx("同步生成与新视频 100% 严丝合缝的新 ASS 字幕 (_clip.ass)"));
+		chk_sync_ass_ = new wxCheckBox(out_box, wxID_ANY, to_wx("生成同步字幕 (_clip.ass)"));
 		chk_sync_ass_->SetValue(true);
 		opt_row->Add(chk_sync_ass_, 0, wxALIGN_CENTER_VERTICAL);
 		out_sizer->Add(opt_row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4);
 
 		main_sizer->Add(out_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-		// 6. 章节预览列表
-		auto* ch_box = new wxStaticBox(this, wxID_ANY, to_wx("检测到的章节列表 (Chapter Annotations Preview)"));
-		auto* ch_sizer = new wxStaticBoxSizer(ch_box, wxVERTICAL);
-		chapter_list_ = new wxListBox(ch_box, wxID_ANY, wxDefaultPosition, wxSize(-1, 65));
-		ch_sizer->Add(chapter_list_, 1, wxEXPAND | wxALL, 4);
-		main_sizer->Add(ch_sizer, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
-
-		// 7. 进度条与状态
+		// 6. 进度条与状态
 		progress_gauge_ = new wxGauge(this, wxID_ANY, 100);
 		main_sizer->Add(progress_gauge_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-		status_lbl_ = new wxStaticText(this, wxID_ANY, to_wx("就绪。请确认配置后点击下方【开始按字幕切分/合并】。"));
+		status_lbl_ = new wxStaticText(this, wxID_ANY, "");
 		status_lbl_->SetForegroundColour(wxColour(100, 100, 100));
 		main_sizer->Add(status_lbl_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
 		// 8. 操作按钮栏
 		auto* btn_sizer = new wxBoxSizer(wxHORIZONTAL);
-		btn_start_ = new wxButton(this, wxID_ANY, to_wx("⚡ 开始按字幕切分/合并"));
+		btn_start_ = new wxButton(this, wxID_ANY, to_wx("开始"));
 		btn_start_->SetDefault();
 		btn_cancel_ = new wxButton(this, wxID_ANY, to_wx("取消"));
 		btn_cancel_->Disable();
 
-		btn_view_log_ = new wxButton(this, wxID_ANY, to_wx("📋 查看执行日志"));
+		btn_view_log_ = new wxButton(this, wxID_ANY, to_wx("查看日志"));
 		btn_view_log_->Disable();
 
-		btn_open_dir_ = new wxButton(this, wxID_ANY, to_wx("📂 打开输出文件夹"));
+		btn_open_dir_ = new wxButton(this, wxID_ANY, to_wx("打开目录"));
 		btn_open_dir_->Disable();
 
-		btn_open_in_aegisub_ = new wxButton(this, wxID_ANY, to_wx("🎬 在 Aegisub 中载入切片工程"));
+		btn_open_in_aegisub_ = new wxButton(this, wxID_ANY, to_wx("在 Aegisub 中打开"));
 		btn_open_in_aegisub_->Disable();
 
 		btn_close_ = new wxButton(this, wxID_ANY, to_wx("关闭"));
@@ -421,7 +386,7 @@ public:
 			                 wxFD_OPEN | wxFD_FILE_MUST_EXIST);
 			if (dlg.ShowModal() == wxID_OK) {
 				s_custom_ffmpeg_path = dlg.GetPath().ToStdWstring();
-				ffmpeg_status_lbl_->SetLabel(fmt_wx("🟢 FFmpeg 已指定: %s", s_custom_ffmpeg_path));
+				ffmpeg_status_lbl_->SetLabel(fmt_wx("FFmpeg: %s", s_custom_ffmpeg_path));
 				ffmpeg_status_lbl_->SetForegroundColour(wxColour(30, 130, 30));
 			}
 		});
@@ -461,9 +426,16 @@ public:
 
 		btn_open_in_aegisub_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
 			if (c_ && c_->project && !last_result_.primary_media_file.empty()) {
-				c_->project->LoadVideo(agi::fs::path(std::filesystem::path(last_result_.primary_media_file)));
 				if (!last_result_.primary_ass_file.empty()) {
-					c_->project->LoadSubtitles(agi::fs::path(std::filesystem::path(last_result_.primary_ass_file)));
+					c_->project->LoadSubtitles(agi::fs::path(std::filesystem::path(last_result_.primary_ass_file)), "", false);
+				}
+				std::filesystem::path media_p(last_result_.primary_media_file);
+				std::wstring ext = media_p.extension().wstring();
+				std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
+				if (ext == L".mp3" || ext == L".wav" || ext == L".aac") {
+					c_->project->LoadAudio(agi::fs::path(media_p));
+				} else {
+					c_->project->LoadVideo(agi::fs::path(media_p));
 				}
 				EndModal(wxID_OK);
 			}
@@ -487,8 +459,8 @@ public:
 		std::wstring ffmpeg_exe = VideoShuffler::FindFFmpegExecutable(s_custom_ffmpeg_path);
 		if (ffmpeg_exe.empty()) {
 			wxMessageBox(
-				to_wx("未检测到 FFmpeg (ffmpeg.exe)。\n\n请点击【选择 FFmpeg...】按钮定位 ffmpeg.exe，\n或将 ffmpeg.exe 复制到 Aegisub 安装目录下，\n或安装 FFmpeg 并将其 bin 目录添加至系统环境变量 PATH。"),
-				to_wx("缺少 FFmpeg 组件"), wxOK | wxICON_WARNING, this);
+				to_wx("未检测到 FFmpeg (ffmpeg.exe)。\n\n请点击【浏览…】定位 ffmpeg.exe，或将其加入系统 PATH。"),
+				to_wx("缺少 FFmpeg"), wxOK | wxICON_WARNING, this);
 			return;
 		}
 
@@ -496,7 +468,6 @@ public:
 		opt.ffmpeg_path = ffmpeg_exe;
 
 		if (rb_mode_highlight_->GetValue()) opt.mode = VideoShuffler::MODE_MERGE_HIGHLIGHT;
-		else if (rb_mode_chapters_->GetValue()) opt.mode = VideoShuffler::MODE_SPLIT_CHAPTERS;
 		else opt.mode = VideoShuffler::MODE_SELECTED_LINES;
 
 		if (rb_fmt_mp4_->GetValue()) opt.format = VideoShuffler::FMT_MP4;

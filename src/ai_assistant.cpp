@@ -847,12 +847,12 @@ AIResultPanel::AIResultPanel(wxWindow* parent, agi::Context* ctx)
 	title->SetFont(title_font);
 	top_row->Add(title, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
 
-	status_ = new wxStaticText(this, wxID_ANY, to_wx("就绪"), wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
+	status_ = new wxStaticText(this, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
 	status_->SetForegroundColour(wxColour(110, 110, 110));
 	top_row->Add(status_, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
 
-	settings_btn_ = new wxButton(this, wxID_ANY, to_wx("⚙ 设置"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
-	close_btn_ = new wxButton(this, wxID_ANY, to_wx("✕"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+	settings_btn_ = new wxButton(this, wxID_ANY, to_wx("设置"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+	close_btn_ = new wxButton(this, wxID_ANY, to_wx("关闭"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
 	top_row->Add(settings_btn_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
 	top_row->Add(close_btn_, 0, wxALIGN_CENTER_VERTICAL);
 	root->Add(top_row, 0, wxEXPAND | wxALL, 6);
@@ -864,11 +864,11 @@ AIResultPanel::AIResultPanel(wxWindow* parent, agi::Context* ctx)
 	auto* frame_page = new wxPanel(notebook_, wxID_ANY);
 	auto* frame_sizer = new wxBoxSizer(wxVERTICAL);
 
-	frame_sizer->Add(new wxStaticText(frame_page, wxID_ANY, to_wx("识别原文：")), 0, wxBOTTOM, 2);
+	frame_sizer->Add(new wxStaticText(frame_page, wxID_ANY, to_wx("原文：")), 0, wxBOTTOM, 2);
 	frame_orig_ = new wxTextCtrl(frame_page, wxID_ANY, "", wxDefaultPosition, wxSize(-1, 52), wxTE_MULTILINE);
 	frame_sizer->Add(frame_orig_, 0, wxEXPAND | wxBOTTOM, 6);
 
-	frame_sizer->Add(new wxStaticText(frame_page, wxID_ANY, to_wx("翻译结果（可编辑）：")), 0, wxBOTTOM, 2);
+	frame_sizer->Add(new wxStaticText(frame_page, wxID_ANY, to_wx("译文：")), 0, wxBOTTOM, 2);
 	frame_trans_ = new wxTextCtrl(frame_page, wxID_ANY, "", wxDefaultPosition, wxSize(-1, 72), wxTE_MULTILINE);
 	frame_sizer->Add(frame_trans_, 1, wxEXPAND | wxBOTTOM, 6);
 
@@ -879,16 +879,6 @@ AIResultPanel::AIResultPanel(wxWindow* parent, agi::Context* ctx)
 	frame_copy_->Disable();
 	frame_resnap_ = new wxButton(frame_page, wxID_ANY, to_wx("重新截图"));
 	frame_retry_ = new wxButton(frame_page, wxID_ANY, to_wx("重试"));
-	auto* frame_motion_btn = new wxButton(frame_page, wxID_ANY, to_wx("运动追踪…"));
-	frame_motion_btn->SetToolTip(to_wx("追踪视频运动花字并生成逐帧相对位移字幕（类似 Mocha）"));
-	frame_motion_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-		c->videoDisplay->SetTool(std::make_unique<VisualToolMotionTrack>(c->videoDisplay, c));
-	});
-	auto* frame_shuffler_btn = new wxButton(frame_page, wxID_ANY, to_wx("按字幕切片/合并…"));
-	frame_shuffler_btn->SetToolTip(to_wx("根据字幕时间轴、注释与章节标记，自动对视频进行精简切分、去除静音与合并重组（类似洋片箱）"));
-	frame_shuffler_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-		ShowVideoShufflerDialog(c);
-	});
 	cancel_btn_ = new wxButton(frame_page, wxID_ANY, to_wx("取消"));
 	cancel_btn_->Disable();
 
@@ -896,8 +886,6 @@ AIResultPanel::AIResultPanel(wxWindow* parent, agi::Context* ctx)
 	frame_btn_row->Add(frame_copy_, 0, wxRIGHT, 4);
 	frame_btn_row->Add(frame_resnap_, 0, wxRIGHT, 4);
 	frame_btn_row->Add(frame_retry_, 0, wxRIGHT, 4);
-	frame_btn_row->Add(frame_motion_btn, 0, wxRIGHT, 4);
-	frame_btn_row->Add(frame_shuffler_btn, 0, wxRIGHT, 4);
 	frame_btn_row->Add(cancel_btn_, 0);
 	frame_sizer->Add(frame_btn_row, 0, wxEXPAND);
 
@@ -917,21 +905,15 @@ AIResultPanel::AIResultPanel(wxWindow* parent, agi::Context* ctx)
 	audio_list_->InsertColumn(3, to_wx("翻译结果"), wxLIST_FORMAT_LEFT, 180);
 	audio_list_->InsertColumn(4, to_wx("状态"), wxLIST_FORMAT_LEFT, 120);
 
-	audio_list_->SetToolTip(to_wx("支持 Ctrl+C 复制选中行，Ctrl+A 全选；右键可弹出菜单复制原文/译文"));
-
 	audio_sizer->Add(audio_list_, 1, wxEXPAND | wxBOTTOM, 6);
 
 	auto* audio_btn_row = new wxBoxSizer(wxHORIZONTAL);
-	audio_apply_sel_ = new wxButton(audio_page, wxID_ANY, to_wx("填入所选/勾选行"));
+	audio_apply_sel_ = new wxButton(audio_page, wxID_ANY, to_wx("填入所选"));
 	audio_apply_sel_->Disable();
-	audio_apply_all_ = new wxButton(audio_page, wxID_ANY, to_wx("一键替换全部"));
+	audio_apply_all_ = new wxButton(audio_page, wxID_ANY, to_wx("全部替换"));
 	audio_apply_all_->Disable();
 	audio_copy_btn_ = new wxButton(audio_page, wxID_ANY, to_wx("复制所选"));
 	audio_copy_btn_->Disable();
-	audio_copy_btn_->SetToolTip(to_wx("复制选中的转写原文与翻译结果（快捷键 Ctrl+C）；右键列表可选择仅复制译文或原文"));
-	audio_vad_btn_ = new wxButton(audio_page, wxID_ANY, to_wx("人声切分…"));
-	audio_vad_btn_->SetToolTip(to_wx("智能人声切分与说话人识别：精准检测说话发声瞬间、结束延长200ms，支持过滤背景乐与按音色匹配角色"));
-	audio_vad_btn_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { ShowVADDiarizeDialog(c); });
 	audio_retry_ = new wxButton(audio_page, wxID_ANY, to_wx("重新识别"));
 	audio_clear_ = new wxButton(audio_page, wxID_ANY, to_wx("清空"));
 	audio_cancel_btn_ = new wxButton(audio_page, wxID_ANY, to_wx("取消"));
@@ -940,7 +922,6 @@ AIResultPanel::AIResultPanel(wxWindow* parent, agi::Context* ctx)
 	audio_btn_row->Add(audio_apply_sel_, 0, wxRIGHT, 4);
 	audio_btn_row->Add(audio_apply_all_, 0, wxRIGHT, 4);
 	audio_btn_row->Add(audio_copy_btn_, 0, wxRIGHT, 4);
-	audio_btn_row->Add(audio_vad_btn_, 0, wxRIGHT, 4);
 	audio_btn_row->Add(audio_retry_, 0, wxRIGHT, 4);
 	audio_btn_row->Add(audio_clear_, 0, wxRIGHT, 4);
 	audio_btn_row->Add(audio_cancel_btn_, 0);
@@ -953,19 +934,18 @@ AIResultPanel::AIResultPanel(wxWindow* parent, agi::Context* ctx)
 	auto* style_page = new wxPanel(notebook_, wxID_ANY);
 	auto* style_sizer = new wxBoxSizer(wxVERTICAL);
 
-	quick_style_chk_ = new wxCheckBox(style_page, wxID_ANY, to_wx("开启样式快切（上下键联动画面，数字键 1-0 切样式）"));
+	quick_style_chk_ = new wxCheckBox(style_page, wxID_ANY, to_wx("启用样式快切"));
 	quick_style_chk_->SetValue(OPT_GET("Tool/Playback/Review Quick Style")->GetBool());
 	quick_style_chk_->Bind(wxEVT_CHECKBOX, &AIResultPanel::OnQuickStyleToggle, this);
 	style_sizer->Add(quick_style_chk_, 0, wxEXPAND | wxALL, 6);
 
 	style_list_ = new wxListBox(style_page, wxID_ANY, wxDefaultPosition, wxDefaultSize, 0, nullptr, wxLB_SINGLE | wxLB_NEEDED_SB);
-	style_list_->SetToolTip(to_wx("前10个样式映射数字键 1~9 和 0；双击直接应用，选中后点下方按钮可调整排序"));
 	style_list_->Bind(wxEVT_LISTBOX_DCLICK, &AIResultPanel::OnStyleListDClick, this);
 	style_sizer->Add(style_list_, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 6);
 
 	auto* style_btn_row = new wxBoxSizer(wxHORIZONTAL);
-	btn_style_up_ = new wxButton(style_page, wxID_ANY, to_wx("▲ 上移"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
-	btn_style_down_ = new wxButton(style_page, wxID_ANY, to_wx("▼ 下移"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+	btn_style_up_ = new wxButton(style_page, wxID_ANY, to_wx("上移"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+	btn_style_down_ = new wxButton(style_page, wxID_ANY, to_wx("下移"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
 	btn_style_apply_ = new wxButton(style_page, wxID_ANY, to_wx("应用"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
 	btn_style_up_->Bind(wxEVT_BUTTON, &AIResultPanel::OnMoveStyleUp, this);
 	btn_style_down_->Bind(wxEVT_BUTTON, &AIResultPanel::OnMoveStyleDown, this);
@@ -974,13 +954,6 @@ AIResultPanel::AIResultPanel(wxWindow* parent, agi::Context* ctx)
 	style_btn_row->Add(btn_style_down_, 1, wxEXPAND | wxRIGHT, 4);
 	style_btn_row->Add(btn_style_apply_, 1, wxEXPAND);
 	style_sizer->Add(style_btn_row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 6);
-
-	auto* tip_label = new wxStaticText(style_page, wxID_ANY, to_wx("方向键上下：切换行并自动跳至该行起始帧画面\n按数字键 1~9, 0：一键将对应序号样式应用至所选行"));
-	wxFont tip_font = tip_label->GetFont();
-	tip_font.SetPointSize(std::max(8, tip_font.GetPointSize() - 1));
-	tip_label->SetFont(tip_font);
-	tip_label->SetForegroundColour(wxColour(120, 120, 120));
-	style_sizer->Add(tip_label, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, 6);
 
 	style_page->SetSizer(style_sizer);
 	notebook_->AddPage(style_page, to_wx("样式快切"), false);
@@ -1484,32 +1457,45 @@ void RunAIFrameTranslate(agi::Context* c, int x0, int y0, int x1, int y1) {
 	std::shared_ptr<VideoFrame> frame;
 	try {
 		double time_sec = c->project->Timecodes().TimeAtFrame(frame_n) / 1000.0;
-		frame = provider->GetFrame(frame_n, time_sec, false);
+		frame = provider->GetFrame(frame_n, time_sec, true);
 	} catch (std::exception& e) {
 		if (c->aiPanel) c->aiPanel->SetStatus(std::string("获取视频帧失败: ") + e.what());
 		return;
 	}
-	if (!frame) {
+	if (!frame || frame->width <= 0 || frame->height <= 0 || frame->data.empty()) {
 		if (c->aiPanel) c->aiPanel->SetStatus("获取视频帧失败（空帧）");
 		return;
 	}
 
-	int w = provider->GetWidth();
-	int h = provider->GetHeight();
+	int pw = provider->GetWidth();
+	int ph = provider->GetHeight();
+	int fw = frame->width;
+	int fh = frame->height;
 	if (x0 < 0 || y0 < 0 || x1 <= x0 || y1 <= y0) {
 		double rx0 = OPT_GET("Tool/AI/Region X0")->GetDouble();
 		double ry0 = OPT_GET("Tool/AI/Region Y0")->GetDouble();
 		double rx1 = OPT_GET("Tool/AI/Region X1")->GetDouble();
 		double ry1 = OPT_GET("Tool/AI/Region Y1")->GetDouble();
 		if (rx1 > rx0 && ry1 > ry0) {
-			x0 = std::clamp(static_cast<int>(rx0 * w / 100.0), 0, w - 1);
-			y0 = std::clamp(static_cast<int>(ry0 * h / 100.0), 0, h - 1);
-			x1 = std::clamp(static_cast<int>(rx1 * w / 100.0), 0, w);
-			y1 = std::clamp(static_cast<int>(ry1 * h / 100.0), 0, h);
+			x0 = std::clamp(static_cast<int>(std::floor(rx0 * fw / 100.0)), 0, fw - 1);
+			y0 = std::clamp(static_cast<int>(std::floor(ry0 * fh / 100.0)), 0, fh - 1);
+			x1 = std::clamp(static_cast<int>(std::ceil(rx1 * fw / 100.0)), 0, fw);
+			y1 = std::clamp(static_cast<int>(std::ceil(ry1 * fh / 100.0)), 0, fh);
 		} else {
-			x0 = 0; y0 = static_cast<int>(h * 0.70);
-			x1 = w; y1 = h;
+			x0 = 0; y0 = static_cast<int>(fh * 0.70);
+			x1 = fw; y1 = fh;
 		}
+	} else if (pw > 0 && ph > 0 && (fw != pw || fh != ph)) {
+		// 流畅预览 (720P) 等缩放帧下，将原视频坐标按比例映射到实际帧尺寸
+		x0 = std::clamp(static_cast<int>(std::floor(static_cast<double>(x0) * fw / pw)), 0, fw - 1);
+		y0 = std::clamp(static_cast<int>(std::floor(static_cast<double>(y0) * fh / ph)), 0, fh - 1);
+		x1 = std::clamp(static_cast<int>(std::ceil(static_cast<double>(x1) * fw / pw)), 0, fw);
+		y1 = std::clamp(static_cast<int>(std::ceil(static_cast<double>(y1) * fh / ph)), 0, fh);
+	} else {
+		x0 = std::clamp(x0, 0, fw - 1);
+		y0 = std::clamp(y0, 0, fh - 1);
+		x1 = std::clamp(x1, 0, fw);
+		y1 = std::clamp(y1, 0, fh);
 	}
 	int rw = x1 - x0;
 	int rh = y1 - y0;
@@ -1520,10 +1506,11 @@ void RunAIFrameTranslate(agi::Context* c, int x0, int y0, int x1, int y1) {
 
 	std::vector<uint8_t> rgb(static_cast<size_t>(rw) * rh * 3);
 	const uint8_t* src = frame->data.data();
-	int pitch = frame->width * 4;
+	int pitch = frame->pitch > 0 ? frame->pitch : (fw * 4);
 	for (int y = 0; y < rh; ++y) {
-		const uint8_t* row = src + (y0 + y) * pitch + x0 * 4;
-		uint8_t* dst = rgb.data() + y * rw * 3;
+		int src_y = frame->flipped ? (fh - 1 - (y0 + y)) : (y0 + y);
+		const uint8_t* row = src + static_cast<size_t>(src_y) * pitch + static_cast<size_t>(x0) * 4;
+		uint8_t* dst = rgb.data() + static_cast<size_t>(y) * rw * 3;
 		for (int x = 0; x < rw; ++x) {
 			dst[x * 3 + 0] = row[x * 4 + 2]; // R
 			dst[x * 3 + 1] = row[x * 4 + 1]; // G
@@ -2082,7 +2069,7 @@ void AIResultPanel::ApplyStyleName(std::string const& style_name) {
 }
 
 
-// ------------------------------------------------------------ 智能人声切分与说话人识别对话框
+// ------------------------------------------------------------ VAD自动分轴对话框
 
 class VADDiarizeDialog : public wxDialog {
 private:
@@ -2102,15 +2089,6 @@ private:
 	wxSpinCtrl* min_silence_ctrl_ = nullptr;
 	wxCheckBox* filter_sfx_chk_ = nullptr;
 
-	wxRadioButton* rb_mode_ref_ = nullptr;
-	wxRadioButton* rb_mode_cluster_ = nullptr;
-	wxRadioButton* rb_mode_vad_only_ = nullptr;
-
-	wxCheckListBox* ref_speaker_list_ = nullptr;
-	wxCheckBox* filter_unmatched_chk_ = nullptr;
-	wxSlider* ref_sim_slider_ = nullptr;
-	wxStaticText* ref_sim_val_lbl_ = nullptr;
-
 	wxComboBox* cluster_count_cb_ = nullptr;
 
 	wxComboBox* insert_pos_cb_ = nullptr;
@@ -2122,83 +2100,6 @@ private:
 	wxButton* start_btn_ = nullptr;
 	wxButton* cancel_btn_ = nullptr;
 	wxButton* close_btn_ = nullptr;
-
-	std::map<std::string, ReferenceSpeaker> detected_speakers_;
-
-	void CollectReferenceSpeakers() {
-		if (!c_ || !c_->ass || !c_->project->AudioProvider()) return;
-		auto* provider = c_->project->AudioProvider();
-
-		struct LineTime { int s, e; };
-		std::map<std::string, std::vector<LineTime>> actor_lines;
-
-		for (const auto& diag : c_->ass->Events) {
-			if (diag.Comment) continue;
-			std::string actor = diag.Actor.get();
-			if (actor.empty()) continue;
-			if (diag.End > diag.Start + 150) {
-				actor_lines[actor].push_back({diag.Start, diag.End});
-			}
-		}
-
-		detected_speakers_.clear();
-		if (ref_speaker_list_) ref_speaker_list_->Clear();
-
-		int idx = 0;
-		for (const auto& pair : actor_lines) {
-			const std::string& name = pair.first;
-			const auto& lines = pair.second;
-			int total_ms = 0;
-			for (const auto& l : lines) total_ms += (l.e - l.s);
-
-			ReferenceSpeaker ref;
-			ref.name = name;
-			ref.count = static_cast<int>(lines.size());
-			ref.total_duration_ms = total_ms;
-
-			std::vector<float> sum_timbre(24, 0.0f);
-			int valid_cnt = 0;
-
-			// 性能优化：限制最多抽样 12 条或累计 30 秒有效语音，极速完成声纹特征中心建模，避免上千行字幕冻结 UI
-			int sampled_ms = 0;
-			for (const auto& l : lines) {
-				if (valid_cnt >= 12 || sampled_ms >= 30000) break;
-				int dur = l.e - l.s;
-				if (dur < 250 && lines.size() > 3) continue;
-				int rate = provider->GetSampleRate();
-				int64_t s0 = static_cast<int64_t>(l.s) * rate / 1000;
-				int64_t s1 = static_cast<int64_t>(l.e) * rate / 1000;
-				auto pcm = ExtractAudio16kMono(provider, s0, s1);
-				if (pcm.size() >= 400) {
-					float harm = 0.0f;
-					auto t = TimbreExtractor::Extract(pcm.data(), pcm.size(), &harm);
-					for (size_t d = 0; d < 24; ++d) sum_timbre[d] += t[d];
-					valid_cnt++;
-					sampled_ms += dur;
-				}
-			}
-
-			if (valid_cnt > 0) {
-				float norm = 0.0f;
-				for (size_t d = 0; d < 24; ++d) {
-					sum_timbre[d] /= valid_cnt;
-					norm += sum_timbre[d] * sum_timbre[d];
-				}
-				norm = std::sqrt(norm);
-				if (norm > 1e-7f) {
-					for (size_t d = 0; d < 24; ++d) sum_timbre[d] /= norm;
-				}
-				ref.centroid = sum_timbre;
-				detected_speakers_[name] = ref;
-
-				wxString label = fmt_wx("%s  (已标注 %d 条，总长 %.1f 秒)",
-					to_wx(name), ref.count, total_ms / 1000.0f);
-				ref_speaker_list_->Append(label);
-				ref_speaker_list_->Check(idx, true);
-				idx++;
-			}
-		}
-	}
 
 	void OnStartClick(wxCommandEvent&) {
 		if (running_) return;
@@ -2227,35 +2128,16 @@ private:
 		cfg.min_silence_ms = min_silence_ctrl_->GetValue();
 		cfg.filter_sfx = filter_sfx_chk_->GetValue();
 
-		if (rb_mode_ref_->GetValue()) cfg.mode = VADConfig::MODE_REFERENCE;
-		else if (rb_mode_cluster_->GetValue()) cfg.mode = VADConfig::MODE_CLUSTER;
-		else cfg.mode = VADConfig::MODE_SEGMENT_ONLY;
-
-		cfg.filter_unmatched = filter_unmatched_chk_->GetValue();
-		cfg.ref_threshold = ref_sim_slider_->GetValue() / 100.0f;
-		cfg.cluster_speakers = cluster_count_cb_->GetSelection();
+		int spk_sel = cluster_count_cb_->GetSelection();
+		if (spk_sel == 0) {
+			cfg.mode = VADConfig::MODE_SEGMENT_ONLY;
+			cfg.cluster_speakers = 0;
+		} else {
+			cfg.mode = VADConfig::MODE_CLUSTER;
+			cfg.cluster_speakers = spk_sel - 1;
+		}
 
 		std::map<std::string, ReferenceSpeaker> active_refs;
-		if (cfg.mode == VADConfig::MODE_REFERENCE) {
-			for (size_t i = 0; i < ref_speaker_list_->GetCount(); ++i) {
-				if (ref_speaker_list_->IsChecked(i)) {
-					int k = 0;
-					for (const auto& pair : detected_speakers_) {
-						if (k == static_cast<int>(i)) {
-							active_refs[pair.first] = pair.second;
-							break;
-						}
-						k++;
-					}
-				}
-			}
-			if (active_refs.empty() && detected_speakers_.empty()) {
-				wxMessageBox(to_wx("当前字幕中未检测到已标注说话人(Actor)的参考行。\n系统将自动切换为【自动区分说话人】模式。"),
-					to_wx("提示"), wxOK | wxICON_INFORMATION, this);
-				cfg.mode = VADConfig::MODE_CLUSTER;
-				rb_mode_cluster_->SetValue(true);
-			}
-		}
 
 		int64_t total_ms = c_->project->AudioProvider()->GetNumSamples() * 1000 / c_->project->AudioProvider()->GetSampleRate();
 		int64_t start_ms = 0;
@@ -2374,9 +2256,9 @@ private:
 			inserted_count++;
 		}
 
-		c_->ass->Commit(to_wx("智能人声切分与说话人识别"), AssFile::COMMIT_DIAG_ADDREM);
+		c_->ass->Commit(to_wx("VAD自动分轴"), AssFile::COMMIT_DIAG_ADDREM);
 
-		wxString finish_msg = fmt_wx("人声切分完成！成功生成 %d 行时间轴（开始紧贴发声，结束延长200ms）。", inserted_count);
+		wxString finish_msg = fmt_wx("完成，共生成 %d 行时间轴。", inserted_count);
 		progress_status_->SetLabel(finish_msg);
 		if (c_->frame) {
 			c_->frame->StatusTimeout(finish_msg, 5000);
@@ -2386,8 +2268,8 @@ private:
 
 public:
 	VADDiarizeDialog(wxWindow* parent, agi::Context* c)
-	: wxDialog(parent, wxID_ANY, to_wx("智能人声切分与说话人识别"),
-		wxDefaultPosition, wxSize(660, 740),
+	: wxDialog(parent, wxID_ANY, to_wx("VAD自动分轴"),
+		wxDefaultPosition, wxSize(560, 480),
 		wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 	, c_(c)
 	, cancel_(std::make_shared<std::atomic<bool>>(false))
@@ -2395,29 +2277,25 @@ public:
 	{
 		auto* main_sizer = new wxBoxSizer(wxVERTICAL);
 
-		// 1. 模型状态指示
+		// 1. 模型状态（仅缺失时提示）
 		bool vad_ok = SileroVAD::Get().IsAvailable();
 		if (!vad_ok) vad_ok = SileroVAD::Get().Init();
-
-		auto* status_box = new wxBoxSizer(wxHORIZONTAL);
-		wxString status_str = vad_ok
-			? to_wx("● Silero VAD v5 模型就绪（已动态启用 ONNX Runtime 引擎）")
-			: to_wx("○ 未能找到 silero_vad.onnx 模型文件（请置于程序运行目录）");
-		model_status_lbl_ = new wxStaticText(this, wxID_ANY, status_str);
-		model_status_lbl_->SetForegroundColour(vad_ok ? wxColour(40, 160, 60) : wxColour(220, 50, 50));
-		status_box->Add(model_status_lbl_, 1, wxALIGN_CENTER_VERTICAL);
-		main_sizer->Add(status_box, 0, wxEXPAND | wxALL, 8);
+		if (!vad_ok) {
+			model_status_lbl_ = new wxStaticText(this, wxID_ANY, to_wx("缺少 silero_vad.onnx 模型文件，请置于程序目录"));
+			model_status_lbl_->SetForegroundColour(wxColour(200, 50, 50));
+			main_sizer->Add(model_status_lbl_, 0, wxEXPAND | wxALL, 8);
+		}
 
 		// 范围选择
 		wxArrayString range_choices;
 		range_choices.Add(to_wx("整段音频"));
-		range_choices.Add(to_wx("仅当前选择的音频选区范围"));
+		range_choices.Add(to_wx("当前音频选区"));
 		range_box_ = new wxRadioBox(this, wxID_ANY, to_wx("处理范围"), wxDefaultPosition, wxDefaultSize, range_choices, 1, wxRA_SPECIFY_ROWS);
 		range_box_->SetSelection(0);
 		main_sizer->Add(range_box_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-		// 2. 时间轴对齐与抗噪切分
-		auto* time_box = new wxStaticBox(this, wxID_ANY, to_wx("时间轴对齐与抗噪切分"));
+		// 2. 时间与抗噪
+		auto* time_box = new wxStaticBox(this, wxID_ANY, to_wx("时间与抗噪"));
 		auto* time_sizer = new wxStaticBoxSizer(time_box, wxVERTICAL);
 
 		auto* grid_time = new wxFlexGridSizer(2, wxSize(10, 6));
@@ -2428,123 +2306,81 @@ public:
 			grid_time->Add(ctrl, 1, wxEXPAND);
 		};
 
-		// 前置缓冲
 		auto* pad_start_box = new wxBoxSizer(wxHORIZONTAL);
 		pad_start_ctrl_ = new wxSpinCtrl(time_box, wxID_ANY, "0", wxDefaultPosition, wxSize(90, -1), wxSP_ARROW_KEYS, -100, 200, 0);
 		pad_start_box->Add(pad_start_ctrl_, 0, wxRIGHT, 6);
-		pad_start_box->Add(new wxStaticText(time_box, wxID_ANY, to_wx("ms（默认 0ms，精准紧贴说话人发声那一刻）")), 0, wxALIGN_CENTER_VERTICAL);
-		grid_time->Add(new wxStaticText(time_box, wxID_ANY, to_wx("开始时间微调：")), 0, wxALIGN_CENTER_VERTICAL);
+		pad_start_box->Add(new wxStaticText(time_box, wxID_ANY, to_wx("ms")), 0, wxALIGN_CENTER_VERTICAL);
+		grid_time->Add(new wxStaticText(time_box, wxID_ANY, to_wx("开始偏移：")), 0, wxALIGN_CENTER_VERTICAL);
 		grid_time->Add(pad_start_box, 1, wxEXPAND);
 
-		// 后置延长
 		auto* pad_end_box = new wxBoxSizer(wxHORIZONTAL);
 		pad_end_ctrl_ = new wxSpinCtrl(time_box, wxID_ANY, "200", wxDefaultPosition, wxSize(90, -1), wxSP_ARROW_KEYS, 0, 800, 200);
 		pad_end_box->Add(pad_end_ctrl_, 0, wxRIGHT, 6);
-		pad_end_box->Add(new wxStaticText(time_box, wxID_ANY, to_wx("ms（默认延长 200ms，防止漏掉句尾吞音）")), 0, wxALIGN_CENTER_VERTICAL);
-		grid_time->Add(new wxStaticText(time_box, wxID_ANY, to_wx("结束向后延长：")), 0, wxALIGN_CENTER_VERTICAL);
+		pad_end_box->Add(new wxStaticText(time_box, wxID_ANY, to_wx("ms")), 0, wxALIGN_CENTER_VERTICAL);
+		grid_time->Add(new wxStaticText(time_box, wxID_ANY, to_wx("结束延长：")), 0, wxALIGN_CENTER_VERTICAL);
 		grid_time->Add(pad_end_box, 1, wxEXPAND);
 
-		// VAD 灵敏度与抗噪
 		wxArrayString th_choices;
-		th_choices.Add(to_wx("灵敏 (0.35) —— 适合清晰低语、微弱人声"));
-		th_choices.Add(to_wx("标准 (0.50) —— 官方推荐阈值，日常影视与对话（推荐）"));
-		th_choices.Add(to_wx("抗噪 (0.65) —— 滤除较强背景杂音"));
-		th_choices.Add(to_wx("强抗噪 (0.80) —— 背景有强歌声、游戏爆鸣音时推荐"));
+		th_choices.Add(to_wx("高 (0.35)"));
+		th_choices.Add(to_wx("标准 (0.50)"));
+		th_choices.Add(to_wx("抗噪 (0.65)"));
+		th_choices.Add(to_wx("强抗噪 (0.80)"));
 		threshold_cb_ = new wxComboBox(time_box, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, th_choices, wxCB_READONLY);
 		threshold_cb_->SetSelection(1);
-		add_row("抗噪灵敏度：", threshold_cb_);
+		add_row("检测灵敏度：", threshold_cb_);
 
-		// 最小人声时长
 		auto* dur_box = new wxBoxSizer(wxHORIZONTAL);
 		min_speech_ctrl_ = new wxSpinCtrl(time_box, wxID_ANY, "250", wxDefaultPosition, wxSize(90, -1), wxSP_ARROW_KEYS, 50, 1000, 250);
 		dur_box->Add(min_speech_ctrl_, 0, wxRIGHT, 6);
-		dur_box->Add(new wxStaticText(time_box, wxID_ANY, to_wx("ms（短于此时间的短促敲击、枪声、UI按键音将被过滤）")), 0, wxALIGN_CENTER_VERTICAL);
-		grid_time->Add(new wxStaticText(time_box, wxID_ANY, to_wx("最小人声时长：")), 0, wxALIGN_CENTER_VERTICAL);
+		dur_box->Add(new wxStaticText(time_box, wxID_ANY, to_wx("ms")), 0, wxALIGN_CENTER_VERTICAL);
+		grid_time->Add(new wxStaticText(time_box, wxID_ANY, to_wx("最短语音：")), 0, wxALIGN_CENTER_VERTICAL);
 		grid_time->Add(dur_box, 1, wxEXPAND);
 
-		// 连贯停顿合并
 		auto* sil_box = new wxBoxSizer(wxHORIZONTAL);
 		min_silence_ctrl_ = new wxSpinCtrl(time_box, wxID_ANY, "200", wxDefaultPosition, wxSize(90, -1), wxSP_ARROW_KEYS, 50, 800, 200);
 		sil_box->Add(min_silence_ctrl_, 0, wxRIGHT, 6);
-		sil_box->Add(new wxStaticText(time_box, wxID_ANY, to_wx("ms（说话人在同一句话中的短暂换气停顿将自动连贯合并）")), 0, wxALIGN_CENTER_VERTICAL);
-		grid_time->Add(new wxStaticText(time_box, wxID_ANY, to_wx("连贯停顿合并：")), 0, wxALIGN_CENTER_VERTICAL);
+		sil_box->Add(new wxStaticText(time_box, wxID_ANY, to_wx("ms")), 0, wxALIGN_CENTER_VERTICAL);
+		grid_time->Add(new wxStaticText(time_box, wxID_ANY, to_wx("停顿合并间隔：")), 0, wxALIGN_CENTER_VERTICAL);
 		grid_time->Add(sil_box, 1, wxEXPAND);
+
+		wxArrayString cl_choices;
+		cl_choices.Add(to_wx("不识别说话人数"));
+		cl_choices.Add(to_wx("自动"));
+		cl_choices.Add(to_wx("1 人"));
+		cl_choices.Add(to_wx("2 人"));
+		cl_choices.Add(to_wx("3 人"));
+		cl_choices.Add(to_wx("4 人"));
+		cl_choices.Add(to_wx("5 人"));
+		cluster_count_cb_ = new wxComboBox(time_box, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, cl_choices, wxCB_READONLY);
+		cluster_count_cb_->SetSelection(0);
+		add_row("说话人数：", cluster_count_cb_);
 
 		time_sizer->Add(grid_time, 0, wxEXPAND | wxALL, 6);
 
-		filter_sfx_chk_ = new wxCheckBox(time_box, wxID_ANY, to_wx("开启游戏音效与爆炸杂音过滤（基于人声谐波周期性过滤无调性杂音）"));
+		filter_sfx_chk_ = new wxCheckBox(time_box, wxID_ANY, to_wx("过滤无调性音效"));
 		filter_sfx_chk_->SetValue(true);
 		time_sizer->Add(filter_sfx_chk_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 6);
 
 		main_sizer->Add(time_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-		// 3. 说话人与音色匹配模式
-		auto* spk_box = new wxStaticBox(this, wxID_ANY, to_wx("说话人与音色匹配"));
-		auto* spk_sizer = new wxStaticBoxSizer(spk_box, wxVERTICAL);
-
-		rb_mode_ref_ = new wxRadioButton(spk_box, wxID_ANY, to_wx("依照现有字幕已标注的说话人 (Actor) 音色匹配（精准对齐角色）"), wxDefaultPosition, wxDefaultSize, wxRB_GROUP);
-		rb_mode_cluster_ = new wxRadioButton(spk_box, wxID_ANY, to_wx("自动区分说话人（声纹聚类，自动划分说话人 1, 2...）"));
-		rb_mode_vad_only_ = new wxRadioButton(spk_box, wxID_ANY, to_wx("仅切分人声时间轴（不区分说话人，生成空白行）"));
-
-		spk_sizer->Add(rb_mode_ref_, 0, wxALL, 4);
-
-		auto* ref_panel = new wxBoxSizer(wxVERTICAL);
-		ref_speaker_list_ = new wxCheckListBox(spk_box, wxID_ANY, wxDefaultPosition, wxSize(-1, 80));
-		ref_panel->Add(ref_speaker_list_, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4);
-
-		filter_unmatched_chk_ = new wxCheckBox(spk_box, wxID_ANY, to_wx("【抗干扰】过滤未匹配音色（仅保留选定角色，自动剔除背景歌声、杂谈与游戏音）"));
-		filter_unmatched_chk_->SetValue(true);
-		ref_panel->Add(filter_unmatched_chk_, 0, wxLEFT | wxBOTTOM, 4);
-
-		auto* sim_row = new wxBoxSizer(wxHORIZONTAL);
-		sim_row->Add(new wxStaticText(spk_box, wxID_ANY, to_wx("音色匹配相似度阈值：")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
-		ref_sim_slider_ = new wxSlider(spk_box, wxID_ANY, 65, 40, 90, wxDefaultPosition, wxSize(180, -1));
-		sim_row->Add(ref_sim_slider_, 1, wxEXPAND | wxRIGHT, 6);
-		ref_sim_val_lbl_ = new wxStaticText(spk_box, wxID_ANY, to_wx("65%"));
-		sim_row->Add(ref_sim_val_lbl_, 0, wxALIGN_CENTER_VERTICAL);
-		ref_panel->Add(sim_row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 4);
-
-		spk_sizer->Add(ref_panel, 0, wxEXPAND | wxLEFT, 18);
-
-		spk_sizer->Add(rb_mode_cluster_, 0, wxALL, 4);
-
-		auto* cluster_row = new wxBoxSizer(wxHORIZONTAL);
-		cluster_row->Add(new wxStaticText(spk_box, wxID_ANY, to_wx("预计说话人数：")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
-		wxArrayString cl_choices;
-		cl_choices.Add(to_wx("自动推测"));
-		cl_choices.Add(to_wx("1 人（单人旁白/解说）"));
-		cl_choices.Add(to_wx("2 人（双人对话/采访）"));
-		cl_choices.Add(to_wx("3 人"));
-		cl_choices.Add(to_wx("4 人"));
-		cl_choices.Add(to_wx("5 人"));
-		cluster_count_cb_ = new wxComboBox(spk_box, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, cl_choices, wxCB_READONLY);
-		cluster_count_cb_->SetSelection(0);
-		cluster_row->Add(cluster_count_cb_, 0);
-		spk_sizer->Add(cluster_row, 0, wxEXPAND | wxLEFT | wxBOTTOM, 22);
-
-		spk_sizer->Add(rb_mode_vad_only_, 0, wxALL, 4);
-
-		main_sizer->Add(spk_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
-
-		// 4. 输出与应用选项
-		auto* out_box = new wxStaticBox(this, wxID_ANY, to_wx("输出与应用选项"));
+		// 3. 输出
+		auto* out_box = new wxStaticBox(this, wxID_ANY, to_wx("输出"));
 		auto* out_sizer = new wxBoxSizer(wxHORIZONTAL);
 
 		out_sizer->Add(new wxStaticText(out_box, wxID_ANY, to_wx("输出位置：")), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
 		wxArrayString pos_choices;
-		pos_choices.Add(to_wx("追加到字幕末尾"));
+		pos_choices.Add(to_wx("追加到末尾"));
 		pos_choices.Add(to_wx("清空并重新生成"));
 		insert_pos_cb_ = new wxComboBox(out_box, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, pos_choices, wxCB_READONLY);
 		insert_pos_cb_->SetSelection(0);
 		out_sizer->Add(insert_pos_cb_, 1, wxRIGHT, 10);
 
-		fill_label_chk_ = new wxCheckBox(out_box, wxID_ANY, to_wx("填入说话人标签 [角色名]"));
+		fill_label_chk_ = new wxCheckBox(out_box, wxID_ANY, to_wx("填入说话人标签"));
 		fill_label_chk_->SetValue(false);
 		out_sizer->Add(fill_label_chk_, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
 
 		link_style_chk_ = new wxCheckBox(out_box, wxID_ANY, to_wx("联动样式快切"));
 		link_style_chk_->SetValue(true);
-		link_style_chk_->SetToolTip(to_wx("按识别出的说话人序号自动应用样式快切面板中的对应样式"));
 		out_sizer->Add(link_style_chk_, 0, wxALIGN_CENTER_VERTICAL);
 
 		main_sizer->Add(out_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
@@ -2553,13 +2389,14 @@ public:
 		progress_gauge_ = new wxGauge(this, wxID_ANY, 100);
 		main_sizer->Add(progress_gauge_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
-		progress_status_ = new wxStaticText(this, wxID_ANY, to_wx("准备就绪。配置完毕后点击下方【开始切分与识别】。"));
+		progress_status_ = new wxStaticText(this, wxID_ANY, "");
 		progress_status_->SetForegroundColour(wxColour(100, 100, 100));
 		main_sizer->Add(progress_status_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 8);
 
 		// 6. 操作按钮
 		auto* btn_sizer = new wxBoxSizer(wxHORIZONTAL);
-		start_btn_ = new wxButton(this, wxID_ANY, to_wx("开始切分与识别"));
+		start_btn_ = new wxButton(this, wxID_ANY, to_wx("开始"));
+		if (!vad_ok) start_btn_->Disable();
 		cancel_btn_ = new wxButton(this, wxID_ANY, to_wx("取消"));
 		cancel_btn_->Disable();
 		close_btn_ = new wxButton(this, wxID_ANY, to_wx("关闭"));
@@ -2573,10 +2410,6 @@ public:
 
 		SetSizerAndFit(main_sizer);
 		Centre();
-
-		ref_sim_slider_->Bind(wxEVT_SLIDER, [this](wxCommandEvent&) {
-			ref_sim_val_lbl_->SetLabel(fmt_wx("%d%%", ref_sim_slider_->GetValue()));
-		});
 
 		start_btn_->Bind(wxEVT_BUTTON, &VADDiarizeDialog::OnStartClick, this);
 		cancel_btn_->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
@@ -2593,29 +2426,13 @@ public:
 			EndModal(wxID_CANCEL);
 		});
 
-		CollectReferenceSpeakers();
-		if (detected_speakers_.empty()) {
-			rb_mode_cluster_->SetValue(true);
-			rb_mode_ref_->Enable(false);
-			filter_unmatched_chk_->Enable(false);
-			ref_speaker_list_->Enable(false);
-			ref_sim_slider_->Enable(false);
-		} else {
-			rb_mode_ref_->SetValue(true);
-		}
-
-		auto update_modes = [this]() {
-			bool is_ref = rb_mode_ref_->GetValue() && !detected_speakers_.empty();
-			ref_speaker_list_->Enable(is_ref);
-			filter_unmatched_chk_->Enable(is_ref);
-			ref_sim_slider_->Enable(is_ref);
-			cluster_count_cb_->Enable(rb_mode_cluster_->GetValue());
+		auto update_spk_ui = [this]() {
+			bool has_spk = (cluster_count_cb_->GetSelection() != 0);
+			fill_label_chk_->Enable(has_spk);
+			if (!has_spk) fill_label_chk_->SetValue(false);
 		};
-
-		rb_mode_ref_->Bind(wxEVT_RADIOBUTTON, [update_modes](wxCommandEvent&) { update_modes(); });
-		rb_mode_cluster_->Bind(wxEVT_RADIOBUTTON, [update_modes](wxCommandEvent&) { update_modes(); });
-		rb_mode_vad_only_->Bind(wxEVT_RADIOBUTTON, [update_modes](wxCommandEvent&) { update_modes(); });
-		update_modes();
+		cluster_count_cb_->Bind(wxEVT_COMBOBOX, [update_spk_ui](wxCommandEvent&) { update_spk_ui(); });
+		update_spk_ui();
 	}
 
 	~VADDiarizeDialog() override {

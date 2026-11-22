@@ -120,7 +120,7 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 }
 
 void ShowFrameMatchSettingsDialog(agi::Context *c) {
-	wxDialog d(c->parent, -1, to_wx("视觉对帧匹配设置"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+	wxDialog d(c->parent, -1, to_wx("对帧设置"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
 
 	auto main_sizer = new wxBoxSizer(wxVERTICAL);
 
@@ -183,10 +183,10 @@ void ShowFrameMatchSettingsDialog(agi::Context *c) {
 	auto sim_box_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, to_wx("匹配参数与阈值"));
 	auto sim_box = sim_box_sizer->GetStaticBox();
 	auto sim_row = new wxBoxSizer(wxHORIZONTAL);
-	sim_row->Add(new wxStaticText(sim_box, -1, _("Minimum region similarity (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	sim_row->Add(new wxStaticText(sim_box, -1, to_wx("最低区域相似度 (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
 	auto minimum_similarity = new wxSpinCtrl(sim_box, -1, wxEmptyString, wxDefaultPosition, wxSize(70, -1), wxSP_ARROW_KEYS, 50, 95, OPT_GET("Tool/Frame Match/Minimum Similarity")->GetInt());
 	sim_row->Add(minimum_similarity, 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 15);
-	sim_row->Add(new wxStaticText(sim_box, -1, _("Rerun similarity step (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
+	sim_row->Add(new wxStaticText(sim_box, -1, to_wx("重算相似度步长 (%):")), 0, wxALIGN_CENTRE_VERTICAL | wxRIGHT, 8);
 	auto rerun_step = new wxSpinCtrl(sim_box, -1, wxEmptyString, wxDefaultPosition, wxSize(70, -1), wxSP_ARROW_KEYS, 5, 30, OPT_GET("Tool/Frame Match/Rerun Step")->GetInt());
 	sim_row->Add(rerun_step, 0, wxALIGN_CENTRE_VERTICAL);
 	sim_box_sizer->Add(sim_row, 0, wxEXPAND | wxALL, 6);

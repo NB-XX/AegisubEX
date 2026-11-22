@@ -484,8 +484,8 @@
 			"Region Y0" : 70.0,
 			"Region X1" : 100.0,
 			"Region Y1" : 100.0,
-			"Pad Start" : 300,
-			"Pad End" : 300
+			"Pad Start" : 0,
+			"Pad End" : 0
 		},
 		"Colour Picker" : {
 			"Mode" : 4,

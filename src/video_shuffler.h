@@ -32,6 +32,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -40,7 +41,27 @@
 
 namespace VideoShuffler {
 
+inline std::string PathToUtf8(const std::filesystem::path& p) {
+	const std::wstring& w = p.wstring();
+	if (w.empty()) return "";
+	int len = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+	if (len <= 0) return "";
+	std::string out(static_cast<size_t>(len), '\0');
+	WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), out.data(), len, nullptr, nullptr);
+	return out;
+}
+
+inline std::string FormatMsSeconds(int ms) {
+	if (ms <= 0) return "0.000";
+	int s = ms / 1000;
+	int rem = ms % 1000;
+	char buf[32];
+	snprintf(buf, sizeof(buf), "%d.%03d", s, rem);
+	return std::string(buf);
+}
+
 struct ShufflerLogger {
+	mutable std::mutex mtx;
 	std::ostringstream ss;
 	void Log(const std::string& line) {
 		auto now = std::chrono::system_clock::now();
@@ -49,9 +70,13 @@ struct ShufflerLogger {
 		localtime_s(&tm_buf, &t);
 		char t_str[32];
 		strftime(t_str, sizeof(t_str), "[%H:%M:%S] ", &tm_buf);
+		std::lock_guard<std::mutex> lk(mtx);
 		ss << t_str << line << "\r\n";
 	}
-	std::string Str() const { return ss.str(); }
+	std::string Str() const {
+		std::lock_guard<std::mutex> lk(mtx);
+		return ss.str();
+	}
 };
 
 struct SpeechInterval {
@@ -62,20 +87,9 @@ struct SpeechInterval {
 	std::vector<AssDialogue*> lines;
 };
 
-struct ChapterInfo {
-	int main_idx = 1;
-	int sub_idx = 1;
-	std::string name;          // e.g. "1.1 开场白"
-	std::string raw_title;     // e.g. "开场白"
-	std::vector<SpeechInterval> intervals;
-	std::vector<AssDialogue*> all_lines;
-	int total_duration_ms = 0;
-};
-
 enum ShufflerMode {
 	MODE_MERGE_HIGHLIGHT = 0,   // 切分并拼接为完整精简视频（去除无声与废话）
-	MODE_SPLIT_CHAPTERS = 1,    // 按章节注释批量切片 (# 章节名 / ## 小节名)
-	MODE_SELECTED_LINES = 2     // 仅切分当前选中的字幕行
+	MODE_SELECTED_LINES = 1     // 仅切分当前选中的字幕行
 };
 
 enum MediaFormat {
@@ -94,8 +108,6 @@ struct ShufflerConfig {
 	int lead_in_ms = 100;             // 前置缓冲 (ms)
 	int lead_out_ms = 150;            // 后置缓冲 (ms)
 	bool generate_synced_ass = true;  // 生成与新视频时间轴严密对齐的 ASS 字幕
-	bool generate_raw_ass = false;    // 生成原时间轴 ASS 字幕
-	bool skip_blank_chapters = true;  // 跳过无名章节
 	std::wstring ffmpeg_path;         // 指定的 FFmpeg 可执行文件路径
 	std::wstring output_dir;          // 输出目录
 	std::wstring output_prefix;       // 文件名前缀
@@ -125,19 +137,6 @@ inline std::string FormatMsDuration(int ms) {
 	else
 		snprintf(buf, sizeof(buf), "%02d:%02d", m, s);
 	return std::string(buf);
-}
-
-// 清理非法文件名字符 (宽字符版本，彻底避免多字节编码损坏)
-inline std::wstring SanitizeFileName(std::wstring name) {
-	const std::wstring invalid_chars = L"\\/:*?\"<>|";
-	for (wchar_t& c : name) {
-		if (invalid_chars.find(c) != std::wstring::npos || c == L'\r' || c == L'\n') {
-			c = L'_';
-		}
-	}
-	while (!name.empty() && (name.front() == L' ' || name.front() == L'\t')) name.erase(name.begin());
-	while (!name.empty() && (name.back() == L' ' || name.back() == L'\t')) name.pop_back();
-	return name.empty() ? L"chapter" : name;
 }
 
 // 自动搜寻 FFmpeg 可执行程序
@@ -238,93 +237,34 @@ inline std::wstring FindFFmpegExecutable(const std::wstring& preferred_path = L"
 	return L"";
 }
 
-// 解析字幕中的章节与语音区间
-inline std::vector<ChapterInfo> ParseChapters(
+// 解析字幕并按时间排序合并重叠或相邻的语音区间
+inline std::vector<SpeechInterval> ParseSpeechIntervals(
 	agi::Context* c,
 	const ShufflerConfig& opt,
 	int video_duration_ms,
 	const std::set<AssDialogue*>& selected_lines = {})
 {
-	std::vector<ChapterInfo> chapters;
-	if (!c || !c->ass) return chapters;
+	std::vector<SpeechInterval> result;
+	if (!c || !c->ass) return result;
+	if (opt.mode == MODE_SELECTED_LINES && selected_lines.empty()) return result;
 
-	int chapter_main = 1;
-	int chapter_sub = 1;
-
-	ChapterInfo cur_chap;
-	cur_chap.main_idx = chapter_main;
-	cur_chap.sub_idx = chapter_sub;
-	cur_chap.name = "1.1 开始";
-	cur_chap.raw_title = "开始";
-
-	SpeechInterval cur_interval;
-	bool has_pending_interval = false;
-
-	auto commit_interval = [&]() {
-		if (has_pending_interval) {
-			cur_chap.intervals.push_back(cur_interval);
-			cur_chap.total_duration_ms += (cur_interval.end_ms - cur_interval.start_ms);
-			has_pending_interval = false;
-		}
+	struct RawInterval {
+		int pad_s;
+		int pad_e;
+		int raw_s;
+		int raw_e;
+		AssDialogue* diag;
 	};
-
-	auto commit_chapter = [&]() {
-		commit_interval();
-		if (!cur_chap.intervals.empty() || !cur_chap.all_lines.empty()) {
-			chapters.push_back(cur_chap);
-		}
-		cur_chap.intervals.clear();
-		cur_chap.all_lines.clear();
-		cur_chap.total_duration_ms = 0;
-	};
+	std::vector<RawInterval> items;
 
 	for (auto& entry : c->ass->Events) {
 		auto diag = &entry;
-		if (!diag) continue;
+		if (!diag || diag->Comment) continue;
 
-		if (opt.mode == MODE_SELECTED_LINES && !selected_lines.empty()) {
-			if (selected_lines.find(diag) == selected_lines.end()) {
-				continue;
-			}
+		if (opt.mode == MODE_SELECTED_LINES) {
+			if (selected_lines.find(diag) == selected_lines.end()) continue;
 		}
 
-		std::string text = diag->Text.get();
-		// 去除首尾空白
-		size_t first = text.find_first_not_of(" \t\r\n");
-		std::string trimmed_text = (first == std::string::npos) ? "" : text.substr(first);
-
-		if (diag->Comment) {
-			if (trimmed_text.starts_with("##")) {
-				// 二级小节
-				commit_chapter();
-				chapter_sub++;
-				std::string title = trimmed_text.substr(2);
-				size_t tf = title.find_first_not_of(" \t");
-				title = (tf == std::string::npos) ? "" : title.substr(tf);
-				cur_chap.main_idx = chapter_main;
-				cur_chap.sub_idx = chapter_sub;
-				cur_chap.raw_title = title;
-				cur_chap.name = std::to_string(chapter_main) + "." + std::to_string(chapter_sub) + (title.empty() ? "" : " " + title);
-			} else if (trimmed_text.starts_with("#")) {
-				// 一级章节
-				commit_chapter();
-				chapter_main++;
-				chapter_sub = 1;
-				std::string title = trimmed_text.substr(1);
-				size_t tf = title.find_first_not_of(" \t");
-				title = (tf == std::string::npos) ? "" : title.substr(tf);
-				cur_chap.main_idx = chapter_main;
-				cur_chap.sub_idx = chapter_sub;
-				cur_chap.raw_title = title;
-				cur_chap.name = std::to_string(chapter_main) + "." + std::to_string(chapter_sub) + (title.empty() ? "" : " " + title);
-			} else {
-				// 普通注释：作为被裁减掉的内容，强制截断当前语音片段
-				commit_interval();
-			}
-			continue;
-		}
-
-		// 有效对话行
 		int raw_s = static_cast<int>(diag->Start);
 		int raw_e = static_cast<int>(diag->End);
 		if (raw_e <= raw_s) continue;
@@ -332,43 +272,49 @@ inline std::vector<ChapterInfo> ParseChapters(
 		int pad_s = std::max(0, raw_s - opt.lead_in_ms);
 		int pad_e = (video_duration_ms > 0) ? std::min(video_duration_ms, raw_e + opt.lead_out_ms) : (raw_e + opt.lead_out_ms);
 
-		// 若起始点超出视频范围或边界倒挂则忽略
 		if (video_duration_ms > 0 && pad_s >= video_duration_ms) continue;
 		if (pad_e <= pad_s) continue;
 
-		cur_chap.all_lines.push_back(diag);
+		items.push_back({ pad_s, pad_e, raw_s, raw_e, diag });
+	}
 
-		if (!has_pending_interval) {
-			cur_interval.start_ms = pad_s;
-			cur_interval.end_ms = pad_e;
-			cur_interval.orig_start_ms = raw_s;
-			cur_interval.orig_end_ms = raw_e;
-			cur_interval.lines.clear();
-			cur_interval.lines.push_back(diag);
-			has_pending_interval = true;
+	if (items.empty()) return result;
+
+	// 按起始时间（相同时按结束时间）稳定排序，确保重叠或乱序字幕合并为同一段而不重复剪切
+	std::stable_sort(items.begin(), items.end(), [](const RawInterval& a, const RawInterval& b) {
+		if (a.pad_s != b.pad_s) return a.pad_s < b.pad_s;
+		return a.pad_e < b.pad_e;
+	});
+
+	for (const auto& item : items) {
+		if (result.empty()) {
+			SpeechInterval inv;
+			inv.start_ms = item.pad_s;
+			inv.end_ms = item.pad_e;
+			inv.orig_start_ms = item.raw_s;
+			inv.orig_end_ms = item.raw_e;
+			inv.lines.push_back(item.diag);
+			result.push_back(std::move(inv));
 		} else {
-			int gap = pad_s - cur_interval.end_ms;
-			// 若间隔小于合并阈值且时序递增，则合并为一个连贯片段
-			if (gap <= opt.gap_threshold_ms && pad_s >= cur_interval.start_ms) {
-				cur_interval.end_ms = std::max(cur_interval.end_ms, pad_e);
-				cur_interval.orig_end_ms = std::max(cur_interval.orig_end_ms, raw_e);
-				cur_interval.lines.push_back(diag);
+			auto& cur = result.back();
+			if (item.pad_s <= cur.end_ms + opt.gap_threshold_ms) {
+				cur.end_ms = std::max(cur.end_ms, item.pad_e);
+				cur.orig_start_ms = std::min(cur.orig_start_ms, item.raw_s);
+				cur.orig_end_ms = std::max(cur.orig_end_ms, item.raw_e);
+				cur.lines.push_back(item.diag);
 			} else {
-				// 否则提交上一片段并开启新片段
-				commit_interval();
-				cur_interval.start_ms = pad_s;
-				cur_interval.end_ms = pad_e;
-				cur_interval.orig_start_ms = raw_s;
-				cur_interval.orig_end_ms = raw_e;
-				cur_interval.lines.clear();
-				cur_interval.lines.push_back(diag);
-				has_pending_interval = true;
+				SpeechInterval inv;
+				inv.start_ms = item.pad_s;
+				inv.end_ms = item.pad_e;
+				inv.orig_start_ms = item.raw_s;
+				inv.orig_end_ms = item.raw_e;
+				inv.lines.push_back(item.diag);
+				result.push_back(std::move(inv));
 			}
 		}
 	}
 
-	commit_chapter();
-	return chapters;
+	return result;
 }
 
 // 生成对齐新视频时间轴的 ASS 字幕文件
@@ -376,7 +322,9 @@ inline bool WriteRetimedAssFile(
 	agi::Context* c,
 	const std::vector<SpeechInterval>& intervals,
 	const std::filesystem::path& out_path,
-	bool raw_time = false)
+	bool raw_time = false,
+	const std::wstring& linked_media_filename = L"",
+	bool is_audio = false)
 {
 	std::ofstream ofs(out_path, std::ios::binary);
 	if (!ofs.is_open()) return false;
@@ -398,6 +346,12 @@ inline bool WriteRetimedAssFile(
 		ofs << "PlayResY: " << res_y << "\n";
 	}
 	ofs << "\n";
+
+	if (!linked_media_filename.empty()) {
+		ofs << "[Aegisub Project Garbage]\n";
+		std::string media_utf8 = PathToUtf8(std::filesystem::path(linked_media_filename));
+		ofs << (is_audio ? "Audio File: " : "Video File: ") << media_utf8 << "\n\n";
+	}
 
 	ofs << "[V4+ Styles]\n";
 	ofs << "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n";
@@ -449,7 +403,8 @@ struct FFmpegRunner {
 		const std::wstring& cmd_line,
 		std::atomic<bool>* cancel_flag,
 		const wchar_t* working_dir = NULL,
-		std::string* out_err_log = nullptr)
+		std::string* out_err_log = nullptr,
+		bool capture_on_success = false)
 	{
 		SECURITY_ATTRIBUTES sa;
 		sa.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -519,7 +474,7 @@ struct FFmpegRunner {
 				if (bytesAvail > 0) {
 					if (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
 						accumulated_output.append(buffer, bytesRead);
-						if (accumulated_output.size() > 16384) {
+						if (!capture_on_success && accumulated_output.size() > 16384) {
 							accumulated_output.erase(0, accumulated_output.size() - 8192);
 						}
 					}
@@ -549,15 +504,157 @@ struct FFmpegRunner {
 		CloseHandle(pi.hProcess);
 		CloseHandle(pi.hThread);
 
-		if (exitCode != 0 && out_err_log) {
-			*out_err_log = accumulated_output;
-			if (out_err_log->empty()) {
-				*out_err_log = "进程非正常退出，退出代码: " + std::to_string(exitCode);
+		if (out_err_log) {
+			if (exitCode != 0) {
+				*out_err_log = accumulated_output;
+				if (out_err_log->empty()) {
+					*out_err_log = "进程非正常退出，退出代码: " + std::to_string(exitCode);
+				}
+			} else if (capture_on_success) {
+				*out_err_log = std::move(accumulated_output);
 			}
 		}
 		return (exitCode == 0);
 	}
 };
+
+inline std::wstring FindFFprobeExecutable(const std::wstring& ffmpeg_exe) {
+	std::error_code ec;
+	if (!ffmpeg_exe.empty()) {
+		std::filesystem::path probe = std::filesystem::path(ffmpeg_exe).parent_path() / L"ffprobe.exe";
+		if (std::filesystem::exists(probe, ec)) {
+			return probe.wstring();
+		}
+	}
+	wchar_t found[MAX_PATH];
+	if (SearchPathW(NULL, L"ffprobe.exe", NULL, MAX_PATH, found, NULL) > 0) {
+		return std::wstring(found);
+	}
+	return L"";
+}
+
+struct KeyframePoint {
+	int ms = 0;
+	double sec = 0.0;
+	std::string pts_str;
+};
+
+struct SourceMediaProbe {
+	bool valid = false;
+	std::string v_codec;
+	std::string v_profile;
+	std::string v_pix_fmt;
+	std::string v_fps;
+	std::string v_timescale;
+	std::string a_codec;
+	std::string a_sample_rate;
+	std::string a_channels;
+	std::vector<KeyframePoint> keyframes;
+};
+
+inline SourceMediaProbe ProbeSourceMedia(
+	const std::wstring& ffprobe_exe,
+	const std::filesystem::path& video_path,
+	std::atomic<bool>* cancel_flag,
+	ShufflerLogger& logger)
+{
+	SourceMediaProbe info;
+	if (ffprobe_exe.empty()) {
+		logger.Log("未找到 ffprobe.exe，无损快剪将回退为普通关键帧直拷。");
+		return info;
+	}
+
+	// 1. 探测音视频流编码参数（用于局部重编码与原流无缝拼接）
+	std::wostringstream stream_cmd;
+	stream_cmd << L"\"" << ffprobe_exe << L"\" -v error -show_entries "
+	           << L"stream=codec_type,codec_name,profile,pix_fmt,r_frame_rate,time_base,sample_rate,channels "
+	           << L"-of default=noprint_wrappers=1 \"" << video_path.wstring() << L"\"";
+
+	std::string stream_out;
+	if (!FFmpegRunner::Execute(stream_cmd.str(), cancel_flag, NULL, &stream_out, true)) {
+		logger.Log("ffprobe 流参数探测失败，将使用普通直拷模式。");
+		return info;
+	}
+
+	std::string cur_type;
+	std::istringstream iss(stream_out);
+	std::string line;
+	while (std::getline(iss, line)) {
+		while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+		auto eq = line.find('=');
+		if (eq == std::string::npos) continue;
+		std::string k = line.substr(0, eq);
+		std::string v = line.substr(eq + 1);
+		if (k == "codec_type") {
+			cur_type = v;
+		} else if (cur_type == "video") {
+			if (k == "codec_name" && info.v_codec.empty()) info.v_codec = v;
+			else if (k == "profile" && info.v_profile.empty()) info.v_profile = v;
+			else if (k == "pix_fmt" && info.v_pix_fmt.empty()) info.v_pix_fmt = v;
+			else if (k == "r_frame_rate" && info.v_fps.empty()) info.v_fps = v;
+			else if (k == "time_base" && info.v_timescale.empty()) {
+				auto slash = v.find('/');
+				if (slash != std::string::npos) info.v_timescale = v.substr(slash + 1);
+			}
+		} else if (cur_type == "audio") {
+			if (k == "codec_name" && info.a_codec.empty()) info.a_codec = v;
+			else if (k == "sample_rate" && info.a_sample_rate.empty()) info.a_sample_rate = v;
+			else if (k == "channels" && info.a_channels.empty()) info.a_channels = v;
+		}
+	}
+
+	if (info.v_codec != "h264" && info.v_codec != "hevc") {
+		logger.Log("源视频编码 (" + info.v_codec + ") 暂不支持局部重编码拼接，将使用普通直拷。");
+		return info;
+	}
+	if (!info.a_codec.empty() && info.a_codec != "aac" && info.a_codec != "mp3") {
+		logger.Log("源音频编码 (" + info.a_codec + ") 暂不支持局部重编码拼接，将使用普通直拷。");
+		return info;
+	}
+
+	// 2. 仅读取包头关键帧时间戳（不解码像素，极快）
+	std::wostringstream kf_cmd;
+	kf_cmd << L"\"" << ffprobe_exe << L"\" -v error -select_streams v:0 "
+	       << L"-show_entries packet=pts_time,flags -of csv=p=0 \"" << video_path.wstring() << L"\"";
+
+	std::string kf_out;
+	if (!FFmpegRunner::Execute(kf_cmd.str(), cancel_flag, NULL, &kf_out, true)) {
+		logger.Log("ffprobe 关键帧索引读取失败，将使用普通直拷模式。");
+		return info;
+	}
+
+	std::istringstream kss(kf_out);
+	while (std::getline(kss, line)) {
+		while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+		auto comma = line.find(',');
+		if (comma == std::string::npos) continue;
+		if (line.find('K', comma + 1) == std::string::npos) continue;
+		std::string ts_str = line.substr(0, comma);
+		if (ts_str.empty() || ts_str == "N/A") continue;
+		try {
+			double sec = std::stod(ts_str);
+			int ms = static_cast<int>(std::llround(sec * 1000.0));
+			if (ms >= 0) info.keyframes.push_back({ ms, sec, ts_str });
+		} catch (...) {}
+	}
+
+	std::sort(info.keyframes.begin(), info.keyframes.end(), [](const KeyframePoint& a, const KeyframePoint& b) {
+		return a.sec < b.sec;
+	});
+	info.keyframes.erase(
+		std::unique(info.keyframes.begin(), info.keyframes.end(), [](const KeyframePoint& a, const KeyframePoint& b) {
+			return a.ms == b.ms;
+		}),
+		info.keyframes.end());
+
+	info.valid = !info.keyframes.empty();
+	if (info.valid) {
+		logger.Log("智能局部重编码已启用: 视频=" + info.v_codec + ", 音频=" + (info.a_codec.empty() ? "无" : info.a_codec) +
+		           ", pix_fmt=" + info.v_pix_fmt + ", fps=" + info.v_fps +
+		           ", 关键帧数=" + std::to_string(info.keyframes.size()));
+	}
+	return info;
+}
 
 struct ShufflerResult {
 	bool success = false;
@@ -596,12 +693,12 @@ inline ShufflerResult RunVideoShuffler(
 	// 1. 定位 FFmpeg 可执行文件
 	std::wstring ffmpeg_exe = FindFFmpegExecutable(opt.ffmpeg_path);
 	if (ffmpeg_exe.empty()) {
-		res.message = to_wx("错误：未在系统环境变量 PATH 或常见目录中检测到 FFmpeg (ffmpeg.exe)！\n\n请安装 FFmpeg 并添加至系统 PATH 环境变量，或在弹窗界面中点击【选择 FFmpeg...】进行指定。");
+		res.message = to_wx("错误：未在系统环境变量 PATH 或常见目录中检测到 FFmpeg (ffmpeg.exe)！\n\n请安装 FFmpeg 并添加至系统 PATH 环境变量，或在弹窗界面中点击【浏览…】进行指定。");
 		logger.Log("❌ 未找到 FFmpeg 可执行文件。");
 		res.detailed_log = logger.Str();
 		return res;
 	}
-	logger.Log("FFmpeg 引擎路径: " + agi::wxformat(wxS("%s"), ffmpeg_exe).ToStdString());
+	logger.Log("FFmpeg 引擎路径: " + PathToUtf8(std::filesystem::path(ffmpeg_exe)));
 
 	// 2. 解析视频路径并严格确保为绝对路径
 	agi::fs::path video_fs_path = c->path->MakeAbsolute(c->project->VideoName(), "?script");
@@ -618,19 +715,19 @@ inline ShufflerResult RunVideoShuffler(
 	std::error_code ec;
 	if (!std::filesystem::exists(video_fs_path, ec)) {
 		res.message = fmt_wx("错误：无法在以下路径找到视频源文件：\n%s\n请确认视频文件是否存在！", video_fs_path.wstring());
-		logger.Log("❌ 视频源文件不存在: " + video_fs_path.string());
+		logger.Log("❌ 视频源文件不存在: " + PathToUtf8(video_fs_path));
 		res.detailed_log = logger.Str();
 		return res;
 	}
-	logger.Log("视频源路径: " + video_fs_path.string());
+	logger.Log("视频源路径: " + PathToUtf8(video_fs_path));
 
 	auto provider = c->project->VideoProvider();
 	int video_dur_ms = provider ? static_cast<int>(provider->GetFrameCount() * 1000.0 / provider->GetFPS().FPS()) : 0;
 	logger.Log("视频规格: 时长 " + FormatMsDuration(video_dur_ms) + " (" + std::to_string(video_dur_ms) + " ms)");
 
-	// 3. 解析章节与片段
-	auto chapters = ParseChapters(c, opt, video_dur_ms, selected_lines);
-	if (chapters.empty()) {
+	// 3. 解析并合并有效语音片段
+	auto all_intervals = ParseSpeechIntervals(c, opt, video_dur_ms, selected_lines);
+	if (all_intervals.empty()) {
 		res.message = to_wx("未找到有效的字幕行进行切分。");
 		logger.Log("❌ 未找到有效的字幕行进行切分。");
 		res.detailed_log = logger.Str();
@@ -657,11 +754,11 @@ inline ShufflerResult RunVideoShuffler(
 	std::filesystem::create_directories(out_dir_path, ec);
 	if (ec) {
 		res.message = fmt_wx("错误：无法创建输出目录：\n%s\n系统错误: %s", out_dir_path.wstring(), to_wx(ec.message()));
-		logger.Log("❌ 无法创建输出目录: " + out_dir_path.string());
+		logger.Log("❌ 无法创建输出目录: " + PathToUtf8(out_dir_path));
 		res.detailed_log = logger.Str();
 		return res;
 	}
-	logger.Log("输出目录: " + out_dir_path.string());
+	logger.Log("输出目录: " + PathToUtf8(out_dir_path));
 
 	std::wstring prefix = opt.output_prefix.empty() ? video_fs_path.stem().wstring() : opt.output_prefix;
 
@@ -671,26 +768,15 @@ inline ShufflerResult RunVideoShuffler(
 	std::filesystem::create_directories(temp_dir, ec);
 	if (ec) {
 		res.message = fmt_wx("错误：无法创建临时工作目录：\n%s\n系统错误: %s", temp_dir.wstring(), to_wx(ec.message()));
-		logger.Log("❌ 无法创建临时工作目录: " + temp_dir.string());
+		logger.Log("❌ 无法创建临时工作目录: " + PathToUtf8(temp_dir));
 		res.detailed_log = logger.Str();
 		return res;
 	}
-	logger.Log("临时工作目录: " + temp_dir.string());
+	logger.Log("临时工作目录: " + PathToUtf8(temp_dir));
 
-	// 计算总片段数供进度条展示
-	int total_intervals = 0;
-	if (opt.mode == MODE_SPLIT_CHAPTERS) {
-		for (const auto& ch : chapters) {
-			if (opt.skip_blank_chapters && ch.raw_title.empty()) continue;
-			total_intervals += static_cast<int>(ch.intervals.size());
-		}
-	} else {
-		for (const auto& ch : chapters) {
-			total_intervals += static_cast<int>(ch.intervals.size());
-		}
-	}
+	int total_intervals = static_cast<int>(all_intervals.size());
 
-	logger.Log("模式: " + std::string(opt.mode == MODE_SPLIT_CHAPTERS ? "按章节批量切片" : (opt.mode == MODE_SELECTED_LINES ? "切分选中行" : "智能精简合并")));
+	logger.Log("模式: " + std::string(opt.mode == MODE_SELECTED_LINES ? "切分选中行" : "智能精简合并"));
 	logger.Log("有效切片总数: " + std::to_string(total_intervals));
 
 	if (total_intervals == 0) {
@@ -701,44 +787,99 @@ inline ShufflerResult RunVideoShuffler(
 		return res;
 	}
 
-	int processed_intervals = 0;
-
 	auto report = [&](int step_pct, const wxString& msg) {
 		if (on_progress) on_progress(step_pct, msg);
 	};
 
-	report(2, to_wx("正在准备切分..."));
+	report(2, to_wx("正在探测视频关键帧与编码参数..."));
 
+	SourceMediaProbe probe;
+	if (opt.fast_stream_copy && !is_audio) {
+		std::wstring ffprobe_exe = FindFFprobeExecutable(ffmpeg_exe);
+		probe = ProbeSourceMedia(ffprobe_exe, video_fs_path, cancel_flag.get(), logger);
+	}
+
+	std::mutex err_mtx;
 	std::string last_cut_err;
 	std::string last_concat_err;
+	std::atomic<int> processed_intervals{0};
 
-	// 辅助切分单个区间
-	auto cut_single_interval = [&](int idx, const SpeechInterval& inv, const std::filesystem::path& temp_out) -> bool {
-		std::string ss_str = FormatMsTime(inv.start_ms);
-		std::string dur_str = std::to_string((inv.end_ms - inv.start_ms) / 1000.0);
+	auto ascii_to_wide = [](const std::string& s) -> std::wstring {
+		return std::wstring(s.begin(), s.end());
+	};
 
-		logger.Log("切片 #" + std::to_string(idx + 1) + ": " + ss_str + " -> " + FormatMsTime(inv.end_ms) + " (" + dur_str + "s)");
+	auto format_sec_exact = [](double sec) -> std::string {
+		if (sec <= 0.0) return "0.000000";
+		char buf[48];
+		snprintf(buf, sizeof(buf), "%.6f", sec);
+		return std::string(buf);
+	};
 
-		// 将 -ss 置于 -i 之前实现高速关键帧寻道，-t 置于 -i 之后指定精确截取时长
+	const bool use_smart_cut = opt.fast_stream_copy && !is_audio && probe.valid && !probe.keyframes.empty();
+	const std::wstring clip_ext = use_smart_cut ? L".ts" : ext;
+
+	// 辅助切分单个时间段（支持精确关键帧直拷与参数对齐的局部重编码）
+	auto cut_segment = [&](int idx, const char* tag, const std::string& ss_arg, const std::string& dur_arg,
+	                       const std::filesystem::path& temp_out, int ffmpeg_threads, bool use_stream_copy) -> bool {
+		logger.Log("切片 #" + std::to_string(idx + 1) + (tag ? std::string(" [") + tag + "]" : "") +
+		           ": ss=" + ss_arg + ", dur=" + dur_arg + "s");
+
 		std::wostringstream cmd;
 		cmd << L"\"" << ffmpeg_exe << L"\" -hide_banner -loglevel warning -y -ss "
-		    << agi::wxformat(wxS("%s"), ss_str).wc_str()
+		    << ascii_to_wide(ss_arg)
 		    << L" -i \"" << video_fs_path.wstring() << L"\" -t "
-		    << agi::wxformat(wxS("%s"), dur_str).wc_str();
+		    << ascii_to_wide(dur_arg);
 
 		if (is_audio) {
+			cmd << L" -vn -sn -dn";
 			if (opt.format == FMT_WAV) {
-				cmd << L" -vn -c:a pcm_s16le";
+				cmd << L" -c:a pcm_s16le";
 			} else if (opt.format == FMT_MP3) {
-				cmd << L" -vn -c:a libmp3lame -q:a 2";
+				cmd << L" -c:a libmp3lame -q:a 2";
 			} else {
-				cmd << L" -vn -c:a aac -b:a 192k";
+				cmd << L" -c:a aac -b:a 192k";
 			}
 		} else {
-			if (opt.fast_stream_copy) {
+			cmd << L" -map 0:v:0? -map 0:a:0? -sn -dn";
+			if (use_stream_copy) {
 				cmd << L" -c copy -avoid_negative_ts make_zero";
 			} else {
-				cmd << L" -c:v libx264 -preset veryfast -crf 18 -c:a aac -b:a 192k";
+				std::wstring vcodec = (probe.valid && probe.v_codec == "hevc") ? L"libx265" : L"libx264";
+				cmd << L" -c:v " << vcodec << L" -preset veryfast -crf 18 -threads " << ffmpeg_threads;
+				if (use_smart_cut) {
+					cmd << L" -bf 0";
+				}
+				if (probe.valid) {
+					if (!probe.v_pix_fmt.empty()) {
+						cmd << L" -pix_fmt " << ascii_to_wide(probe.v_pix_fmt);
+					}
+					if (!probe.v_fps.empty() && probe.v_fps != "0/0") {
+						cmd << L" -r " << ascii_to_wide(probe.v_fps);
+					}
+					if (!use_smart_cut && opt.format == FMT_MP4 && !probe.v_timescale.empty()) {
+						cmd << L" -video_track_timescale " << ascii_to_wide(probe.v_timescale);
+					}
+					if (vcodec == L"libx264") {
+						if (probe.v_profile == "High") cmd << L" -profile:v high";
+						else if (probe.v_profile == "Main") cmd << L" -profile:v main";
+						else if (probe.v_profile == "Baseline" || probe.v_profile == "Constrained Baseline") cmd << L" -profile:v baseline";
+					}
+				}
+				if (use_smart_cut && probe.a_codec == "mp3") {
+					cmd << L" -c:a libmp3lame -q:a 2";
+				} else {
+					cmd << L" -c:a aac -b:a 192k";
+				}
+				if (probe.valid) {
+					if (!probe.a_sample_rate.empty()) cmd << L" -ar " << ascii_to_wide(probe.a_sample_rate);
+					if (!probe.a_channels.empty()) cmd << L" -ac " << ascii_to_wide(probe.a_channels);
+				}
+				if (!use_smart_cut && opt.format == FMT_MP4) {
+					cmd << L" -movflags +faststart";
+				}
+			}
+			if (use_smart_cut) {
+				cmd << L" -f mpegts";
 			}
 		}
 
@@ -747,36 +888,145 @@ inline ShufflerResult RunVideoShuffler(
 		std::string err_log;
 		bool ok = FFmpegRunner::Execute(cmd.str(), cancel_flag.get(), temp_dir.wstring().c_str(), &err_log);
 		if (!ok) {
-			logger.Log("  ❌ FFmpeg 返回执行失败！");
+			logger.Log("  ❌ 切片 #" + std::to_string(idx + 1) + " FFmpeg 返回执行失败！");
 			if (!err_log.empty()) logger.Log("  输出: " + err_log);
+			std::lock_guard<std::mutex> lk(err_mtx);
 			if (last_cut_err.empty()) last_cut_err = err_log;
+			return false;
 		}
 
-		if (ok) {
-			std::error_code f_ec;
-			auto sz = std::filesystem::file_size(temp_out, f_ec);
-			if (f_ec || sz == 0) {
-				logger.Log("  ❌ 生成的文件大小为 0 字节");
-				if (last_cut_err.empty()) last_cut_err = "FFmpeg 生成的文件大小为 0。";
-				return false;
-			} else {
-				logger.Log("  ✅ 生成成功 (" + std::to_string(sz) + " 字节)");
+		std::error_code f_ec;
+		auto sz = std::filesystem::file_size(temp_out, f_ec);
+		if (f_ec || sz == 0) {
+			logger.Log("  ❌ 切片 #" + std::to_string(idx + 1) + " 生成的文件大小为 0 字节");
+			std::lock_guard<std::mutex> lk(err_mtx);
+			if (last_cut_err.empty()) last_cut_err = "FFmpeg 生成的文件大小为 0。";
+			return false;
+		}
+		logger.Log("  ✅ 切片 #" + std::to_string(idx + 1) + " 生成成功 (" + std::to_string(sz) + " 字节)");
+		return true;
+	};
+
+	// 多线程并行切分一批区间（局部重编码模式使用 MPEG-TS 中间切片 + 精确关键帧 PTS 寻道）
+	auto cut_intervals_parallel = [&](const std::vector<SpeechInterval>& intervals, const std::wstring& clip_prefix, const wxString& label_prefix) -> std::vector<std::filesystem::path> {
+		const size_t n = intervals.size();
+		std::vector<std::vector<std::filesystem::path>> ordered_slots(n);
+		if (n == 0) return {};
+
+		size_t hw = std::thread::hardware_concurrency();
+		if (hw == 0) hw = 4;
+		size_t max_workers = (opt.fast_stream_copy && !use_smart_cut) ? 4 : 6;
+		size_t num_workers = std::min({ n, max_workers, std::max<size_t>(2, hw) });
+		int ffmpeg_threads = std::max(1, static_cast<int>(hw / num_workers));
+
+		logger.Log("并行切分 " + std::to_string(n) + " 个片段，并发工作线程数: " + std::to_string(num_workers) +
+		           (use_smart_cut ? " (关键帧边界局部重编码 / TS 无缝拼接)" : (opt.fast_stream_copy ? " (直拷模式)" : " (全片重编码)")));
+
+		std::atomic<size_t> next_idx{0};
+		std::vector<std::thread> workers;
+		workers.reserve(num_workers);
+
+		for (size_t w = 0; w < num_workers; ++w) {
+			workers.emplace_back([&]() {
+				while (true) {
+					if (cancel_flag && cancel_flag->load()) break;
+					size_t k = next_idx.fetch_add(1);
+					if (k >= n) break;
+
+					const auto& inv = intervals[k];
+					if (inv.end_ms > inv.start_ms) {
+						if (use_smart_cut) {
+							auto kf_it = std::lower_bound(
+								probe.keyframes.begin(), probe.keyframes.end(), inv.start_ms - 40,
+								[](const KeyframePoint& kf, int t_ms) { return kf.ms < t_ms; });
+
+							if (kf_it == probe.keyframes.end() || kf_it->ms >= inv.end_ms - 40) {
+								// 整段位于两关键帧之间：整段局部重编码
+								std::filesystem::path p = temp_dir / (clip_prefix + std::to_wstring(k) + L"_reenc" + clip_ext);
+								if (cut_segment(static_cast<int>(k), "局部重编码",
+								                FormatMsTime(inv.start_ms), FormatMsSeconds(inv.end_ms - inv.start_ms),
+								                p, ffmpeg_threads, false)) {
+									ordered_slots[k].push_back(std::move(p));
+								}
+							} else if (kf_it->ms <= inv.start_ms + 40) {
+								// 起始点落在关键帧上：用原始精确 pts_str 无损直拷
+								double dur_s = std::max(0.01, inv.end_ms / 1000.0 - kf_it->sec);
+								std::filesystem::path p = temp_dir / (clip_prefix + std::to_wstring(k) + L"_copy" + clip_ext);
+								if (cut_segment(static_cast<int>(k), "关键帧直拷",
+								                kf_it->pts_str, format_sec_exact(dur_s),
+								                p, ffmpeg_threads, true)) {
+									ordered_slots[k].push_back(std::move(p));
+								}
+							} else {
+								// 混合切分：头部 [start_ms, kf.sec] 局部重编码 + 主体 [kf.pts_str, end_ms] 无损直拷
+								const KeyframePoint& kf = *kf_it;
+								double head_dur_s = std::max(0.01, kf.sec - inv.start_ms / 1000.0);
+								double body_dur_s = std::max(0.01, inv.end_ms / 1000.0 - kf.sec);
+								std::filesystem::path p_head = temp_dir / (clip_prefix + std::to_wstring(k) + L"_0_head" + clip_ext);
+								std::filesystem::path p_body = temp_dir / (clip_prefix + std::to_wstring(k) + L"_1_body" + clip_ext);
+								bool ok_h = cut_segment(static_cast<int>(k), "头部局部重编码",
+								                        FormatMsTime(inv.start_ms), format_sec_exact(head_dur_s),
+								                        p_head, ffmpeg_threads, false);
+								bool ok_b = cut_segment(static_cast<int>(k), "主体无损直拷",
+								                        kf.pts_str, format_sec_exact(body_dur_s),
+								                        p_body, ffmpeg_threads, true);
+								if (ok_h && ok_b) {
+									ordered_slots[k].push_back(std::move(p_head));
+									ordered_slots[k].push_back(std::move(p_body));
+								}
+							}
+						} else {
+							std::filesystem::path temp_clip = temp_dir / (clip_prefix + std::to_wstring(k) + clip_ext);
+							if (cut_segment(static_cast<int>(k), nullptr,
+							                FormatMsTime(inv.start_ms), FormatMsSeconds(inv.end_ms - inv.start_ms),
+							                temp_clip, ffmpeg_threads, opt.fast_stream_copy)) {
+								ordered_slots[k].push_back(std::move(temp_clip));
+							}
+						}
+					}
+
+					int done = ++processed_intervals;
+					int pct = static_cast<int>(10 + 80.0 * done / std::max(1, total_intervals));
+					report(pct, fmt_wx("%s [%d/%d]...", label_prefix, done, total_intervals));
+				}
+			});
+		}
+		for (auto& t : workers) {
+			if (t.joinable()) t.join();
+		}
+
+		std::vector<std::filesystem::path> temp_clips;
+		temp_clips.reserve(n * 2);
+		for (size_t k = 0; k < n; ++k) {
+			for (auto& p : ordered_slots[k]) {
+				temp_clips.push_back(std::move(p));
 			}
 		}
-		return ok;
+		return temp_clips;
 	};
 
 	// 辅助合并多个片段
 	auto concat_clips = [&](const std::vector<std::filesystem::path>& clip_files, const std::filesystem::path& final_out) -> bool {
 		if (clip_files.empty()) return false;
-		if (clip_files.size() == 1) {
-			// 单个片段无需 concat，直接复制
-			logger.Log("仅有 1 个切片，直接重命名复制到最终媒体...");
-			std::filesystem::copy_file(clip_files[0], final_out, std::filesystem::copy_options::overwrite_existing, ec);
-			return !ec;
+		if (clip_files.size() == 1 && !use_smart_cut) {
+			// 单个同容器片段无需 concat，优先同盘 O(1) 移动，失败再复制
+			logger.Log("仅有 1 个切片，直接输出到最终媒体: " + PathToUtf8(final_out));
+			std::error_code mv_ec;
+			std::filesystem::remove(final_out, mv_ec);
+			mv_ec.clear();
+			std::filesystem::rename(clip_files[0], final_out, mv_ec);
+			if (!mv_ec) return true;
+
+			std::error_code cp_ec;
+			std::filesystem::copy_file(clip_files[0], final_out, std::filesystem::copy_options::overwrite_existing, cp_ec);
+			if (!cp_ec) return true;
+
+			last_concat_err = "写入最终文件失败 (" + PathToUtf8(final_out) + "): " + cp_ec.message();
+			logger.Log("  ❌ " + last_concat_err);
+			return false;
 		}
 
-		logger.Log("开始合并 " + std::to_string(clip_files.size()) + " 个片段到: " + final_out.string());
+		logger.Log("开始合并 " + std::to_string(clip_files.size()) + " 个片段到: " + PathToUtf8(final_out));
 		std::filesystem::path list_path = temp_dir / L"concat_list.txt";
 		{
 			std::ofstream list_fs(list_path, std::ios::binary);
@@ -786,16 +1036,27 @@ inline ShufflerResult RunVideoShuffler(
 				return false;
 			}
 			for (const auto& cp : clip_files) {
-				// 相对路径写入纯文件名 clip_x.mp4，由 working_dir 指定 temp_dir
-				std::string fn = cp.filename().string();
-				list_fs << "file '" << fn << "'\n";
+				std::string fn = PathToUtf8(cp.filename());
+				std::string escaped;
+				escaped.reserve(fn.size());
+				for (char ch : fn) {
+					if (ch == '\'') escaped += "'\\''";
+					else escaped += ch;
+				}
+				list_fs << "file '" << escaped << "'\n";
 			}
 		}
 
 		std::wostringstream cmd;
 		cmd << L"\"" << ffmpeg_exe << L"\" -hide_banner -loglevel warning -y -f concat -safe 0 -i \""
-		    << list_path.wstring() << L"\" -c copy \""
-		    << final_out.wstring() << L"\"";
+		    << list_path.wstring() << L"\" -c copy";
+		if (use_smart_cut && opt.format == FMT_MP4) {
+			if (probe.a_codec == "aac") {
+				cmd << L" -bsf:a aac_adtstoasc";
+			}
+			cmd << L" -movflags +faststart";
+		}
+		cmd << L" \"" << final_out.wstring() << L"\"";
 
 		std::string err_log;
 		bool ok = FFmpegRunner::Execute(cmd.str(), cancel_flag.get(), temp_dir.wstring().c_str(), &err_log);
@@ -821,103 +1082,27 @@ inline ShufflerResult RunVideoShuffler(
 	};
 
 	try {
-		if (opt.mode == MODE_SPLIT_CHAPTERS) {
-			// -------------------------------------------------------------
-			// 模式 1: 按章节分别切分并导出多个分段文件
-			// -------------------------------------------------------------
-			int chap_count = 0;
-			std::string content_txt = "章节起始时间\t章节名称\t片段数\t总时长\n";
+		std::filesystem::path out_media = out_dir_path / (prefix + (opt.mode == MODE_SELECTED_LINES ? L"_selection" : L"_cut") + ext);
+		std::filesystem::path out_ass = out_dir_path / (prefix + (opt.mode == MODE_SELECTED_LINES ? L"_selection" : L"_cut") + L".ass");
 
-			for (size_t ci = 0; ci < chapters.size(); ++ci) {
-				if (cancel_flag && cancel_flag->load()) break;
-				const auto& ch = chapters[ci];
-				if (opt.skip_blank_chapters && ch.raw_title.empty()) continue;
-				if (ch.intervals.empty()) continue;
+		report(10, fmt_wx("正在并行切分 %d 个片段...", static_cast<int>(all_intervals.size())));
+		std::vector<std::filesystem::path> temp_clips = cut_intervals_parallel(
+			all_intervals,
+			L"clip_",
+			to_wx("正在切分片段"));
 
-				chap_count++;
-				std::wstring clean_ch_name = SanitizeFileName(to_wx(ch.name).ToStdWstring());
-				std::filesystem::path out_media = out_dir_path / (prefix + L"_" + clean_ch_name + ext);
-				std::filesystem::path out_ass = out_dir_path / (prefix + L"_" + clean_ch_name + L".ass");
-
-				report(static_cast<int>(10 + 80.0 * processed_intervals / total_intervals),
-				       fmt_wx("正在切分章节 [%d/%d]: %s...", chap_count, static_cast<int>(chapters.size()), to_wx(ch.name)));
-
-				std::vector<std::filesystem::path> temp_clips;
-				for (size_t k = 0; k < ch.intervals.size(); ++k) {
-					if (cancel_flag && cancel_flag->load()) break;
-					std::filesystem::path temp_clip = temp_dir / (L"clip_" + std::to_wstring(ci) + L"_" + std::to_wstring(k) + ext);
-					if (cut_single_interval(static_cast<int>(k), ch.intervals[k], temp_clip)) {
-						temp_clips.push_back(temp_clip);
-					}
-					processed_intervals++;
-				}
-
-				if (cancel_flag && cancel_flag->load()) break;
-
-				if (!temp_clips.empty()) {
-					if (concat_clips(temp_clips, out_media)) {
-						res.output_media_files.push_back(out_media.wstring());
-						if (res.primary_media_file.empty()) res.primary_media_file = out_media.wstring();
-					}
-
-					// 生成新时间轴字幕
-					if (opt.generate_synced_ass) {
-						if (WriteRetimedAssFile(c, ch.intervals, out_ass, false)) {
-							res.output_ass_files.push_back(out_ass.wstring());
-							if (res.primary_ass_file.empty()) res.primary_ass_file = out_ass.wstring();
-						}
-					}
-
-					int ch_dur = ch.total_duration_ms;
-					content_txt += FormatMsTime(ch.intervals.front().start_ms) + "\t" + ch.name + "\t" +
-					               std::to_string(ch.intervals.size()) + "\t" + FormatMsDuration(ch_dur) + "\n";
-				}
+		if (cancel_flag && !cancel_flag->load() && !temp_clips.empty()) {
+			report(92, to_wx("正在合并最终媒体文件..."));
+			if (concat_clips(temp_clips, out_media)) {
+				res.output_media_files.push_back(out_media.wstring());
+				res.primary_media_file = out_media.wstring();
 			}
 
-			// 输出目录索引 content.txt
-			std::filesystem::path content_path = out_dir_path / (prefix + L"_chapters_content.txt");
-			std::ofstream ofs(content_path, std::ios::binary);
-			if (ofs.is_open()) ofs << content_txt;
-
-		} else {
-			// -------------------------------------------------------------
-			// 模式 2 & 3: 汇集所有选中的片段，切分并合并为单个精华视频
-			// -------------------------------------------------------------
-			std::vector<SpeechInterval> all_intervals;
-			for (const auto& ch : chapters) {
-				all_intervals.insert(all_intervals.end(), ch.intervals.begin(), ch.intervals.end());
-			}
-
-			std::filesystem::path out_media = out_dir_path / (prefix + (opt.mode == MODE_SELECTED_LINES ? L"_selection" : L"_cut") + ext);
-			std::filesystem::path out_ass = out_dir_path / (prefix + (opt.mode == MODE_SELECTED_LINES ? L"_selection" : L"_cut") + L".ass");
-
-			std::vector<std::filesystem::path> temp_clips;
-			for (size_t k = 0; k < all_intervals.size(); ++k) {
-				if (cancel_flag && cancel_flag->load()) break;
-				report(static_cast<int>(10 + 80.0 * k / all_intervals.size()),
-				       fmt_wx("正在切分片段 [%d/%d] (长度: %s)...", static_cast<int>(k + 1), static_cast<int>(all_intervals.size()),
-				              to_wx(FormatMsDuration(all_intervals[k].end_ms - all_intervals[k].start_ms))));
-
-				std::filesystem::path temp_clip = temp_dir / (L"clip_" + std::to_wstring(k) + ext);
-				if (cut_single_interval(static_cast<int>(k), all_intervals[k], temp_clip)) {
-					temp_clips.push_back(temp_clip);
-				}
-				processed_intervals++;
-			}
-
-			if (cancel_flag && !cancel_flag->load() && !temp_clips.empty()) {
-				report(92, to_wx("正在合并最终媒体文件..."));
-				if (concat_clips(temp_clips, out_media)) {
-					res.output_media_files.push_back(out_media.wstring());
-					res.primary_media_file = out_media.wstring();
-				}
-
-				if (opt.generate_synced_ass) {
-					report(97, to_wx("正在生成严格对齐的新 ASS 字幕..."));
-					if (WriteRetimedAssFile(c, all_intervals, out_ass, false)) {
-						res.output_ass_files.push_back(out_ass.wstring());
-						res.primary_ass_file = out_ass.wstring();
-					}
+			if (opt.generate_synced_ass) {
+				report(97, to_wx("正在生成严格对齐的新 ASS 字幕..."));
+				if (WriteRetimedAssFile(c, all_intervals, out_ass, false, out_media.filename().wstring(), is_audio)) {
+					res.output_ass_files.push_back(out_ass.wstring());
+					res.primary_ass_file = out_ass.wstring();
 				}
 			}
 		}
@@ -941,7 +1126,7 @@ inline ShufflerResult RunVideoShuffler(
 
 	if (!res.output_media_files.empty()) {
 		res.success = true;
-		res.total_clips_cut = processed_intervals;
+		res.total_clips_cut = processed_intervals.load();
 		res.message = fmt_wx("成功生成 %d 个媒体文件与配套字幕！", static_cast<int>(res.output_media_files.size()));
 		logger.Log("✅ 处理完成！成功输出 " + std::to_string(res.output_media_files.size()) + " 个文件。");
 		report(100, to_wx("处理完成！"));

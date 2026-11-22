@@ -123,8 +123,8 @@ namespace {
 		CMD_NAME("video/tool/frame_match")
 		CMD_ICON(frame_match)
 		wxString StrMenu(const agi::Context *) const override { return to_wx("视觉对帧助手"); }
-		wxString StrDisplay(const agi::Context *) const override { return to_wx("视觉对帧"); }
-		wxString StrHelp() const override { return to_wx("在视频画面上框选字幕区域进行单行对帧匹配"); }
+		wxString StrDisplay(const agi::Context *) const override { return to_wx("单行对帧"); }
+		wxString StrHelp() const override { return to_wx("单行对帧"); }
 
 		void operator()(agi::Context *c) override {
 			if (c->videoDisplay->ToolIsType(typeid(VisualToolTimingRegion)))
@@ -140,7 +140,7 @@ namespace {
 		CMD_TYPE(COMMAND_VALIDATE)
 		wxString StrMenu(const agi::Context *) const override { return to_wx("批量视觉对帧"); }
 		wxString StrDisplay(const agi::Context *) const override { return to_wx("批量对帧"); }
-		wxString StrHelp() const override { return to_wx("根据当前框选的字幕区域对所有选中行进行批量对帧匹配"); }
+		wxString StrHelp() const override { return to_wx("批量对帧"); }
 
 		bool Validate(const agi::Context *c) override {
 			return c->project->VideoProvider() && !c->selectionController->GetSelectedSet().empty();
@@ -164,9 +164,9 @@ namespace {
 
 	struct visual_mode_motion_track final : public visual_tool_command<VisualToolMotionTrack> {
 		CMD_NAME("video/tool/motion_track")
-		wxString StrMenu(const agi::Context *) const override { return to_wx("运动追踪选框"); }
-		wxString StrDisplay(const agi::Context *) const override { return to_wx("运动追踪"); }
-		wxString StrHelp() const override { return to_wx("在视频画面上拖拽框选花字目标，框选后自动弹出运动追踪确认与生成面板"); }
+		wxString StrMenu(const agi::Context *) const override { return to_wx("花字跟踪"); }
+		wxString StrDisplay(const agi::Context *) const override { return to_wx("花字跟踪"); }
+		wxString StrHelp() const override { return to_wx("花字跟踪"); }
 
 		wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
 			static const char svg[] =

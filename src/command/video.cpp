@@ -275,47 +275,20 @@ struct video_details final : public validator_video_loaded {
 
 struct video_frame_match_settings final : public Command {
 	CMD_NAME("video/frame_match_settings")
-	wxString StrMenu(const agi::Context *) const override { return to_wx("对帧匹配设置..."); }
-	wxString StrDisplay(const agi::Context *) const override { return to_wx("对帧匹配设置"); }
-	wxString StrHelp() const override { return to_wx("设置视觉对帧引擎与匹配参数阈值"); }
+	wxString StrMenu(const agi::Context *) const override { return to_wx("对帧设置..."); }
+	wxString StrDisplay(const agi::Context *) const override { return to_wx("对帧设置"); }
+	wxString StrHelp() const override { return to_wx("设置对帧引擎与匹配参数阈值"); }
 
 	void operator()(agi::Context *c) override {
 		ShowFrameMatchSettingsDialog(c);
 	}
 };
 
-struct video_motion_track final : public validator_video_loaded {
-	CMD_NAME("video/motion_track")
-	wxString StrMenu(const agi::Context *) const override { return to_wx("运动追踪与相对位移..."); }
-	wxString StrDisplay(const agi::Context *) const override { return to_wx("运动追踪与相对位移"); }
-	wxString StrHelp() const override { return to_wx("在视频画面上拖拽框选花字目标并生成逐帧相对位移字幕"); }
-
-	wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
-		static const char svg[] =
-			"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">"
-			"<path d=\"M4 18 C8 18 8 8 16 8\" fill=\"none\" stroke=\"#E67E22\" stroke-width=\"2\" stroke-dasharray=\"2,2\"/>"
-			"<circle cx=\"4\" cy=\"18\" r=\"2\" fill=\"#E67E22\"/>"
-			"<circle cx=\"16\" cy=\"8\" r=\"5\" fill=\"none\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
-			"<line x1=\"16\" y1=\"1\" x2=\"16\" y2=\"5\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
-			"<line x1=\"16\" y1=\"11\" x2=\"16\" y2=\"15\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
-			"<line x1=\"9\" y1=\"8\" x2=\"13\" y2=\"8\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
-			"<line x1=\"19\" y1=\"8\" x2=\"23\" y2=\"8\" stroke=\"#2980B9\" stroke-width=\"2\"/>"
-			"<circle cx=\"16\" cy=\"8\" r=\"1.5\" fill=\"#E74C3C\"/>"
-			"</svg>";
-		return wxBitmapBundle::FromSVG(svg, wxSize(height, height));
-	}
-
-	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		c->videoDisplay->SetTool(std::make_unique<VisualToolMotionTrack>(c->videoDisplay, c));
-	}
-};
-
 struct video_shuffler final : public validator_video_loaded {
 	CMD_NAME("video/shuffler")
 	wxString StrMenu(const agi::Context *) const override { return to_wx("按字幕切分/合并视频 (Video Shuffler)..."); }
-	wxString StrDisplay(const agi::Context *) const override { return to_wx("按字幕切片/合并"); }
-	wxString StrHelp() const override { return to_wx("基于字幕时间轴、注释与章节标记，自动对视频进行精简切分、去除静音、打乱重组与批量分段"); }
+	wxString StrDisplay(const agi::Context *) const override { return to_wx("字幕分割视频"); }
+	wxString StrHelp() const override { return to_wx("字幕分割视频"); }
 
 	wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
 		static const char svg[] =
@@ -720,7 +693,7 @@ struct review_mode final : public validator_video_loaded {
 	CMD_NAME("review/mode")
 	wxString StrMenu(const agi::Context *) const override { return to_wx("字幕审校模式"); }
 	wxString StrDisplay(const agi::Context *) const override { return to_wx("审校模式"); }
-	wxString StrHelp() const override { return to_wx("字幕审校模式：进入或退出字幕审校模式"); }
+	wxString StrHelp() const override { return to_wx("审校模式"); }
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
 
 	wxBitmapBundle Icon(int height, wxLayoutDirection) const override {
@@ -1010,7 +983,6 @@ namespace cmd {
 		reg(std::make_unique<video_detach>());
 		reg(std::make_unique<video_details>());
 		reg(std::make_unique<video_frame_match_settings>());
-		reg(std::make_unique<video_motion_track>());
 		reg(std::make_unique<video_shuffler>());
 		reg(std::make_unique<video_focus_seek>());
 		reg(std::make_unique<video_frame_copy>());

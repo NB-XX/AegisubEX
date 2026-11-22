@@ -66,6 +66,10 @@ void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 	Stop();
 	provider = new_provider;
 	color_matrix = std::nullopt;
+	if (!provider && review_mode) {
+		SetReviewMode(false);
+		return;
+	}
 	UpdateSmoothPreview();
 }
 
@@ -100,8 +104,8 @@ void VideoController::OnActiveLineChanged(AssDialogue *line) {
 		// 审校模式下：若视频正在播放中，切换活动行绝不打断播放（保持连贯审校体验）
 		if (IsPlaying()) return;
 
-		// 审校模式未播放（暂停/停止）状态下：若开启了样式快切，上下切行联动跳到该行起始帧画面
-		if (OPT_GET("Tool/Playback/Review Quick Style")->GetBool()) {
+		// 审校模式未播放（暂停/停止）状态下：若开启了样式快切或“视频与字幕同步”，切行联动跳到该行起始帧画面
+		if (OPT_GET("Tool/Playback/Review Quick Style")->GetBool() || OPT_GET("Video/Subtitle Sync")->GetBool()) {
 			JumpToTime(line->Start);
 		}
 		return;
